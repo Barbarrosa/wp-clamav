@@ -1,0 +1,6 @@
+/dist/
+/build/
+__pycache__/
+*.pyc
+.phpunit.result.cache
+.DS_Store

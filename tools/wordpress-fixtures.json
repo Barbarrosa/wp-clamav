@@ -1,0 +1,12 @@
+{
+  "wordpress": {
+    "version": "7.1.4",
+    "url": "https://wordpress.org/wordpress-7.1.4.tar.gz",
+    "sha256": "881e53a4681ff2cd911651b11cccdede5ae477ddf0765af5d6a1a8b219a1d835"
+  },
+  "forminator": {
+    "version": "1.58.4",
+    "url": "https://downloads.wordpress.org/plugin/forminator.1.58.4.zip",
+    "sha256": "528b16be3f35b2f33ddccc76ee140a6de4b3f2428cc4a151fcca9ff81cb110a3"
+  }
+}

@@ -1,0 +1,106 @@
+name: Compact plugin qualification
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      channel:
+        type: choice
+        options: [preview, stable]
+        default: preview
+permissions:
+  contents: read
+concurrency:
+  group: compact-plugin-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  php-and-wordpress:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      attestations: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Build the pinned PHP 8.2 fixture environment
+        run: |
+          docker build --platform linux/amd64 -t compact-plugin-builder -f tools/release/Dockerfile tools/release
+          docker network create compact-wordpress
+          docker run --name compact-wordpress-db --network compact-wordpress --network-alias mariadb \
+            --memory=512m --memory-swap=512m -d \
+            -e MARIADB_ROOT_PASSWORD=integration-only-root-password \
+            -e MARIADB_DATABASE=wpclamav -e MARIADB_USER=wpclamav -e MARIADB_PASSWORD=integration-only-password \
+            mariadb:11.4@sha256:5e73baf8179b29f115101bb102763a47a017361f3e9792daccba6646c3ab1532
+          docker run --name compact-plugin --network compact-wordpress --memory=1g --memory-swap=1g -d \
+            -v "$PWD:/workspace/wp-clamav:ro" -v "$RUNNER_TEMP:/work" \
+            -e WP_CI_DB_HOST=mariadb -e WP_CI_DB_PASSWORD=integration-only-password compact-plugin-builder sleep infinity
+          for attempt in $(seq 1 60); do
+            if docker exec compact-wordpress-db healthcheck.sh --connect --innodb_initialized; then break; fi
+            sleep 1
+          done
+          docker exec compact-wordpress-db healthcheck.sh --connect --innodb_initialized
+          docker exec compact-wordpress-db sh -c 'MYSQL_PWD="$MARIADB_ROOT_PASSWORD" mariadb -uroot -e "CREATE DATABASE wp_clamav_multisite_test; GRANT ALL ON wp_clamav_multisite_test.* TO '\''wpclamav'\''@'\''%'\'';"'
+      - name: PHP lint and contract tests
+        run: |
+          mkdir -p "$RUNNER_TEMP/logs"
+          docker exec compact-plugin sh -c 'find /workspace/wp-clamav -name "*.php" -type f -exec php -l {} \;' > "$RUNNER_TEMP/logs/php-lint.log" 2>&1
+          docker exec compact-plugin php -d zend.assertions=1 -d assert.exception=1 /workspace/wp-clamav/tests/run.php > "$RUNNER_TEMP/logs/php-contracts.log" 2>&1
+          docker exec compact-plugin python3 -m unittest discover -s /workspace/wp-clamav/tools -p 'test_*.py' -v > "$RUNNER_TEMP/logs/package-tests.log" 2>&1
+      - name: Real WordPress and Forminator upload lifecycle
+        run: |
+          docker exec compact-plugin python3 /workspace/wp-clamav/tools/wordpress_ci.py \
+            --source /workspace/wp-clamav --output /work/logs --multisite > "$RUNNER_TEMP/logs/wordpress-setup.log" 2>&1
+      - name: Create a pending experimental plugin ZIP and source package
+        if: github.event_name != 'pull_request' && github.ref_name == github.event.repository.default_branch
+        env:
+          RELEASE_CHANNEL: ${{ inputs.channel || 'preview' }}
+        run: |
+          python3 - <<'PY'
+          import json,os,pathlib
+          p=pathlib.Path(os.environ['RUNNER_TEMP'])/'qualification.json'
+          p.write_text(json.dumps({'integration_sha':os.environ['GITHUB_SHA'],'passed':True,
+              'stable_release_qualified':False,'siteground_qualified':False,
+              'checks':['PHP 8.2 syntax/contracts','WordPress 7.1.4/Forminator 1.58.4 real HTTP lifecycle',
+                        'Signed plugin-update hooks','Notification database/HTTP','Multisite application/quota/recovery']},indent=2)+'\n')
+          PY
+          version=$(python3 -c 'import pathlib,re; print(re.search(r"\* Version:\s*(\S+)",pathlib.Path("wp-clamav.php").read_text())[1])')
+          expires=$(( $(date +%s) + 2592000 ))
+          docker exec -e GITHUB_RUN_ID compact-plugin python3 /workspace/wp-clamav/tools/package.py \
+            --source /workspace/wp-clamav --output /work/release/candidate --qualification /work/qualification.json \
+            --version "$version" --repository "$GITHUB_REPOSITORY" --integration-sha "$GITHUB_SHA" \
+            --sequence "$GITHUB_RUN_NUMBER" --expires-at "$expires" --channel "$RELEASE_CHANNEL"
+          sha256sum "$RUNNER_TEMP/release/wp-clamav-$version-candidate.tar.gz" | tee "$RUNNER_TEMP/release/candidate.sha256" >> "$GITHUB_STEP_SUMMARY"
+          echo 'Pending signature; no unsigned release or WordPress update has been published.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Attest the tested plugin build
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        if: github.event_name != 'pull_request' && github.ref_name == github.event.repository.default_branch
+        with:
+          subject-path: |
+            ${{ runner.temp }}/release/*candidate.tar.gz
+            ${{ runner.temp }}/release/candidate/manifest.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: success() && github.event_name != 'pull_request' && github.ref_name == github.event.repository.default_branch
+        with:
+          name: compact-plugin-pending
+          path: |
+            ${{ runner.temp }}/release/*candidate.tar.gz
+            ${{ runner.temp }}/release/candidate.sha256
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: compact-plugin-test-evidence
+          path: |
+            ${{ runner.temp }}/logs/
+            ${{ runner.temp }}/qualification.json
+      - name: Remove disposable services
+        if: always()
+        run: |
+          docker rm -f compact-plugin compact-wordpress-db || true
+          docker network rm compact-wordpress || true
