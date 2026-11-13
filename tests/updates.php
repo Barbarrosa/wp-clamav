@@ -88,9 +88,12 @@ try {
         'budgets' => ['native_as_bytes' => 200000000, 'native_cpu_seconds' => 10, 'worker_wall_seconds' => 10, 'cleanup_seconds' => 1,
             'native_file_bytes' => 10000000, 'update_line_bytes' => 10000, 'update_reserve_bytes' => 100000,
             'freshclam_connect_seconds' => 10, 'freshclam_low_speed_seconds' => 10, 'freshclam_max_attempts' => 3, 'php_work_bytes' => 10000000,
+            'storage_bytes' => 1000000, 'storage_reserve_bytes' => 1000, 'account_remaining_bytes' => 1000000,
+            'inodes_remaining' => 1000, 'inode_reserve' => 5, 'update_state_inodes' => 100, 'quota_observed_at' => 1700000000,
             'cpu_hourly_seconds' => 100, 'cpu_daily_seconds' => 100, 'cpu_monthly_seconds' => 100]];
     $policy = new ResourcePolicy($settings);
     $policy->bindStore(new FileSubmissionStore($temp . '/cpu-ledger'));
+    $policy->setOperationalPaths([$settings['state_dir']]);
     $unbound = $settings; unset($unbound['expected_current_sha256']);
     updateCheck((new NativeUpdateManager($unbound, $policy))->run()['status'] === 'not-configured', 'updater cannot inherit a program from an unbound current pointer');
     $manager = new NativeUpdateManager($settings, $policy);
@@ -100,6 +103,9 @@ try {
     updateCheck(in_array('--as-bytes', $args, true) && in_array('--max-age-seconds', $args, true), 'resource/freshness policy passed explicitly');
     updateCheck(!in_array('--mirror', $args, true), 'no secondary database publisher dependency');
     updateCheck(in_array('--expected-current-sha256', $args, true) && in_array('absent', $args, true), 'native updater checks exact selected pointer under shared lock');
+    updateCheck(in_array('--max-state-bytes', $args, true) && in_array('--max-state-inodes', $args, true), 'retained native generations and scratch have absolute ceilings');
+    $reservePosition = array_search('--disk-reserve-bytes', $args, true);
+    updateCheck($args[$reservePosition + 1] === '1000', 'filesystem operating reserve remains distinct from update workspace allocation');
     $cpu = $policy->diagnostics()['cpu_accounting'];
     updateCheck($cpu['pending_reservations'] === 0 && $cpu['windows']['hourly']['used_seconds'] > 0, 'preflight and update settle their CPU reservations');
     updateCheck($manager->run()['status'] === 'deferred', 'attempt spacing persists across calls');

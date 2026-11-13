@@ -96,13 +96,10 @@ final class Admin
         }
         echo '</select><p class="description">Local execution must pass the account capacity and executable checks. HTTPS uses an explicitly configured external service.</p></td></tr>';
         $this->input('storage_path', 'Private storage directory', (string) $s['storage_path'], 'Absolute path outside every website document root. This is the permanent datastore, not Forminator temporary storage.');
-        $this->input('local_binary', 'Native scanner executable', (string) $s['local_binary'], 'Absolute path to the qualified scanner executable.');
-        $this->input('generation_dir', 'Verified database generation', (string) $s['generation_dir'], 'Absolute path to the prepared, verified signature generation.');
-        $this->input('database_dir', 'Signature database directory', (string) $s['database_dir'], 'Absolute path to original signed database files.');
-        $this->input('certificates_dir', 'Database certificates', (string) $s['certificates_dir'], 'Absolute path to the scanner certificate directory.');
-        $this->input('state_dir', 'Update state directory', (string) $s['state_dir'], 'Private persistent directory for verified update state.');
-        $this->input('updater_binary', 'Native updater executable', (string) $s['updater_binary'], 'Absolute path to the verified native updater.');
-        $this->input('native_manifest', 'Native release manifest', (string) $s['native_manifest'], 'Absolute path to the installed native compatibility manifest.');
+        $this->input('local_binary', 'Native scanner executable', (string) $s['local_binary'], 'Optional absolute path for a manually installed verified bundle. Leave empty to bootstrap from authenticated releases.');
+        $this->input('certificates_dir', 'Database certificates', (string) $s['certificates_dir'], 'Optional certificate-directory override. Leave empty to use the matching native bundle.');
+        $this->input('state_dir', 'Update state directory', (string) $s['state_dir'], 'Leave empty to use private-storage/native-state. This is the persistent state root, not an individual database generation.');
+        $this->input('updater_binary', 'Native updater executable', (string) $s['updater_binary'], 'Optional absolute path to the matching updater for a manually installed bundle.');
         $this->input('programs_dir', 'Private native program directory', (string) $s['programs_dir'], 'Existing owner-only directory outside every document root. Leave empty to use private-storage/programs.');
         echo '<tr><th scope="row"><label for="release_channel">Signed release channel</label></th><td><select id="release_channel" name="settings[release_channel]">';
         foreach (['stable' => 'Stable', 'preview' => 'Preview (explicit opt-in)'] as $value => $label) {

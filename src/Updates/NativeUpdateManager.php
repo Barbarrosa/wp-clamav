@@ -43,6 +43,9 @@ final class NativeUpdateManager
         $interval = max(7200, (int) ($budgets['provider_cron_interval_seconds'] ?? 1800), (int) ($budgets['update_interval_seconds'] ?? 0));
         if ($candidate === null && $now < (int) ($previous['next_at'] ?? 0)) { return ['status' => 'deferred', 'next_at' => $previous['next_at']]; }
         $limits = $this->policy->nativeLimits(PHP_SAPI !== 'cli');
+        $storage = $this->policy->updateStorageLimits($state);
+        $limits['file_bytes'] = min($limits['file_bytes'], intdiv($storage['max_state_bytes'], 5));
+        if ($limits['file_bytes'] < 1) { throw new \RuntimeException('No bounded native update-file allocation remains.'); }
         if (isset($budgets['update_wall_seconds'])) { $limits['wall_seconds'] = min($limits['wall_seconds'], (float) $budgets['update_wall_seconds']); }
         foreach (['update_line_bytes', 'update_reserve_bytes', 'freshclam_connect_seconds', 'freshclam_low_speed_seconds', 'freshclam_max_attempts'] as $required) {
             if (!isset($budgets[$required]) || !is_numeric($budgets[$required]) || $budgets[$required] <= 0) {
@@ -60,12 +63,16 @@ final class NativeUpdateManager
         // Preflight is charged before a second reservation. Recalculate the
         // request deadline and rolling allowances rather than reusing them.
         $limits = $this->policy->nativeLimits(PHP_SAPI !== 'cli');
+        $storage = $this->policy->updateStorageLimits($state);
+        $limits['file_bytes'] = min($limits['file_bytes'], intdiv($storage['max_state_bytes'], 5));
+        if ($limits['file_bytes'] < 1) { throw new \RuntimeException('No bounded native update-file allocation remains.'); }
         if (isset($budgets['update_wall_seconds'])) { $limits['wall_seconds'] = min($limits['wall_seconds'], (float) $budgets['update_wall_seconds']); }
         $args = array_merge([$updater, 'update', '--state', $state, '--scanner', $scanner, '--certs', $certs,
             '--expected-current-sha256', $expectedCurrent], ProcessRunner::limitArguments($limits), [
             '--max-line-bytes', (string) (int) $budgets['update_line_bytes'], '--connect-seconds', (string) (int) $budgets['freshclam_connect_seconds'],
             '--low-speed-seconds', (string) (int) $budgets['freshclam_low_speed_seconds'], '--max-attempts', (string) (int) $budgets['freshclam_max_attempts'],
-            '--max-age-seconds', (string) (int) ($budgets['database_max_age_seconds'] ?? 172800), '--disk-reserve-bytes', (string) (int) $budgets['update_reserve_bytes'],
+            '--max-age-seconds', (string) (int) ($budgets['database_max_age_seconds'] ?? 172800), '--disk-reserve-bytes', (string) $storage['disk_reserve_bytes'],
+            '--max-state-bytes', (string) $storage['max_state_bytes'], '--max-state-inodes', (string) $storage['max_state_inodes'],
             '--engine-sha256', $identity['engine_sha256'], '--options-sha256', $identity['scan_options_sha256']]);
         if ($candidate !== null) { $args = array_merge($args, ['--program-id', $candidate['id']]); }
         $result = $this->supervise($args, $limits, $state, 'update:official');

@@ -29,6 +29,7 @@ final class ConstraintCatalog
         'request_bytes' => ['bytes', 'request'], 'request_remaining_bytes' => ['bytes', 'request'],
         'files_per_request' => ['files', 'request'], 'storage_bytes' => ['bytes', 'private-retained-storage'],
         'storage_reserve_bytes' => ['bytes', 'private-operating-reserve'], 'update_reserve_bytes' => ['bytes', 'native-update-workspace'],
+        'update_state_inodes' => ['inodes', 'native-update-state'],
         'account_remaining_bytes' => ['bytes', 'hosting-account-remaining'], 'inodes_remaining' => ['inodes', 'hosting-account-remaining'],
         'inode_reserve' => ['inodes', 'hosting-account-reserve'], 'php_work_bytes' => ['bytes', 'php-additional-allocation'],
         'native_as_bytes' => ['bytes', 'native-address-space'], 'native_process_bytes' => ['bytes', 'native-process-resident'],

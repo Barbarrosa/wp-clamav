@@ -86,7 +86,8 @@ Configure budgets as finite nonnegative numbers using the units in their names:
 | Native work | `native_as_bytes`, `native_cpu_seconds`, `native_file_bytes`, `worker_wall_seconds`, `request_work_seconds`, `cleanup_seconds`, `cpu_hourly_seconds`, `cpu_daily_seconds`, `cpu_monthly_seconds` |
 | Native RSS | Confirm `native_process_bytes`, `native_account_available_bytes`; larger AS caps require `measured_native_rss_bytes` and variation qualification |
 | PHP/remote work | `php_work_bytes`, request/worker wall and cleanup; optionally `proxy_remaining_seconds` |
-| Official updates | `update_line_bytes`, `freshclam_connect_seconds`, `freshclam_low_speed_seconds`, `freshclam_max_attempts`; optional tighter `update_wall_seconds` |
+| Official updates | `update_line_bytes`, `update_state_inodes`, confirmed account bytes/inodes and inode reserve, `freshclam_connect_seconds`, `freshclam_low_speed_seconds`, `freshclam_max_attempts`; optional tighter `update_wall_seconds` |
+| Code downloads | `code_staging_bytes`, `code_update_seconds`, confirmed account remainder and the request/worker deadline; plugin downloads have their separately configured byte/time budgets |
 | Mail | `mail_message_bytes`, `mail_php_bytes`, `mail_message_overhead_bytes`, `mail_memory_multiplier`, `mail_recipient_hourly`, `mail_reserve_hourly`, `other_mail_hourly`; confirm `mail_provider_hourly`, optionally tighten `mail_attachment_bytes` |
 
 Quota observations subtract subsequent private-store growth. They cannot observe
@@ -96,6 +97,12 @@ Storage includes metadata and inodes, with crash recovery before further
 admission. Canonical JSON records have a 1 MiB format ceiling; oversized narrative
 is rejected explicitly rather than truncated. Capacity pressure stops new work
 and requires operator action; it never removes prior submissions.
+
+Operational accounting also measures retained native generations, code packages,
+and PHP scratch against account remainder. Native updates enforce a separate total
+state ceiling while preserving 20% monitoring headroom. Monitoring complements
+hosting quotas; it is not a kernel-enforced account quota. Adding network sites
+requires fresh quota confirmation before shares can be redistributed.
 
 Database freshness defaults to 48 hours as a security policy. OTP/invitation
 lifetimes are independent security policies and do not alter retention.

@@ -15,6 +15,7 @@ final class ResourcePolicy
     private ?FileSubmissionStore $coordinator = null;
     private ?QuotaSnapshot $quota = null;
     private ?WorkLedger $work = null;
+    private array $operationalPaths = [];
 
     public function __construct(private array $settings = [], ?array $observed = null)
     {
@@ -26,8 +27,55 @@ final class ResourcePolicy
     {
         $this->store = $store;
         if ($coordinator !== null || $this->coordinator === null) { $this->coordinator = $coordinator ?? $store; }
-        $this->quota = new QuotaSnapshot($store, $this->budgets);
+        new OperationalStorage($this->operationalPaths, [$store->directory()]);
+        $this->quota = new QuotaSnapshot($store, $this->budgets, fn(): array => $this->operationalUsage());
         $this->work = new WorkLedger($this->coordinator, $this->budgets);
+    }
+
+    /** Roots outside retained namespaces; missing future directories are observed as zero. */
+    public function setOperationalPaths(array $paths): void
+    {
+        new OperationalStorage($paths, $this->store === null ? [] : [$this->store->directory()]);
+        $this->operationalPaths = $paths;
+    }
+
+    public function operationalUsage(): array
+    {
+        return (new OperationalStorage($this->operationalPaths, $this->store === null ? [] : [$this->store->directory()]))->measure();
+    }
+
+    /** Absolute state ceilings include existing cache/generations/scratch, not only new downloads. */
+    public function updateStorageLimits(string $statePath): array
+    {
+        if ($this->store === null || $this->quota === null) { throw new StorageException('Bind private storage before automatic updates.'); }
+        return $this->store->withAccounting(function () use ($statePath): array {
+            $snapshot = $this->quota->remaining($this->store->usage());
+            $operational = $snapshot['operational_usage'];
+            $state = (new OperationalStorage([$statePath], [$this->store->directory()]))->measure();
+            $normalizedState = $state['roots'][0]['path']; $covered = false;
+            foreach ($operational['roots'] as $root) {
+                if ($normalizedState === $root['path'] || str_starts_with($normalizedState . '/', $root['path'] . '/')) { $covered = true; break; }
+            }
+            if (!$covered) { throw new StorageException('The native update state is outside the configured operational accounting roots.'); }
+            if ($state['bytes'] > $operational['bytes'] || $state['objects'] > $operational['objects']) {
+                throw new StorageException('Operational storage changed during update admission; retry after the active operation completes.');
+            }
+            $allocation = $this->budget('update_reserve_bytes'); $reserve = $this->budget('storage_reserve_bytes');
+            $inodeAllocation = $this->budget('update_state_inodes'); $inodeReserve = $this->budget('inode_reserve');
+            $account = $snapshot['account_remaining_bytes']; $inodes = $snapshot['inodes_remaining'];
+            if ($allocation === null || $reserve === null || $inodeAllocation === null || $inodeReserve === null || $account === null || $inodes === null) {
+                throw new StorageException('Automatic updates require confirmed account bytes/inodes, update-state inode allocation, and operating/update reserves.');
+            }
+            $otherOperational = max(0, $operational['bytes'] - $state['bytes']);
+            $byteCap = min(max(0, $allocation - $otherOperational), $state['bytes'] + max(0, $account - $reserve));
+            $inodeCap = min($inodeAllocation, $state['objects'] + max(0, $inodes - $inodeReserve));
+            if ($byteCap < 1 || $inodeCap < 1 || $reserve >= PHP_INT_MAX || $byteCap >= PHP_INT_MAX || $inodeCap >= PHP_INT_MAX) {
+                throw new StorageException('The confirmed operational update allocation is exhausted or cannot be represented.');
+            }
+            return ['max_state_bytes' => (int) floor($byteCap), 'max_state_inodes' => (int) floor($inodeCap),
+                'disk_reserve_bytes' => (int) ceil($reserve), 'state_usage' => $state,
+                'other_operational_bytes' => $otherOperational, 'quota_snapshot' => $snapshot];
+        });
     }
 
     public function beginNative(string $job, array $limits): ?string
@@ -127,6 +175,7 @@ final class ResourcePolicy
             throw new StorageException('Confirm private-storage allocation, operating reserve and update workspace reserve in Diagnostics before accepting files.');
         }
         $snapshot = $this->quota?->remaining($usage);
+        $operational = $snapshot['operational_usage'] ?? $this->operationalUsage();
         $accountRemaining = $snapshot['account_remaining_bytes'] ?? $this->budget('account_remaining_bytes');
         $limits = [$free === false ? null : $free, max(0, $assigned - (int) ($usage['bytes'] ?? 0)), $accountRemaining];
         $multisite = $this->value('multisite_remaining');
@@ -140,7 +189,8 @@ final class ResourcePolicy
             throw new StorageException('Insufficient inode capacity for this private-storage operation.');
         }
         return ['available_bytes' => max(0, (int) $available - (int) $reserve - (int) $update), 'operating_reserve_bytes' => (int) $reserve,
-            'update_reserve_bytes' => (int) $update, 'account_remaining_known' => $accountRemaining !== null, 'quota_snapshot' => $snapshot];
+            'update_reserve_bytes' => (int) $update, 'account_remaining_known' => $accountRemaining !== null, 'quota_snapshot' => $snapshot,
+            'operational_usage' => $operational];
     }
 
     public function admitStorage(string $path, ?int $expected, array $usage, array $context = []): void
@@ -278,9 +328,12 @@ final class ResourcePolicy
         }
         $native = null;
         try { $native = $this->nativeLimits(false); } catch (\Throwable $e) { $warnings[] = $e->getMessage(); }
+        $operational = null;
+        try { $operational = $this->operationalUsage(); } catch (\Throwable $e) { $warnings[] = $e->getMessage(); }
         return ['observations' => $this->observed, 'allocations' => $this->budgets, 'policy' => ['minimum_headroom_fraction' => 0.20, 'retention' => 'indefinite-explicit-deletion-only'],
             'effective_file_bytes' => $this->fileLimit(), 'effective_native' => $native,
-            'application_record_bytes' => 1048576, 'cpu_accounting' => $this->work?->remaining(),
+            'application_record_bytes' => 1048576, 'cpu_accounting' => $this->work?->remaining(), 'operational_storage' => $operational,
+            'operational_observation_policy' => ['max_entries' => OperationalStorage::DEFAULT_MAX_ENTRIES, 'max_seconds' => OperationalStorage::DEFAULT_MAX_SECONDS],
             'constraints' => ConstraintCatalog::build($this->observed, $this->budgets, [
                 'file_bytes' => ['value' => $this->fileLimit(), 'unit' => 'bytes', 'scope' => 'file'],
                 'native_as_bytes' => ['value' => $native['as_bytes'] ?? null, 'unit' => 'bytes', 'scope' => 'native-address-space']]),

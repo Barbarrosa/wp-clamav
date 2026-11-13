@@ -43,7 +43,8 @@ $settings = array_replace($settings, ['enabled' => true, 'storage_path' => '/wor
     'backend' => 'local', 'profile' => 'full', 'forminator_forms' => array_values($forms), 'notification_rules' => [],
     'budgets' => [
         'storage_bytes' => 268435456, 'storage_reserve_bytes' => 16777216, 'update_reserve_bytes' => 16777216,
-        'account_remaining_bytes' => 268435456, 'inodes_remaining' => 10000, 'inode_reserve' => 100,
+        // This explicitly configured disposable fixture starts a fresh test observation on each setup; it is not a production default.
+        'account_remaining_bytes' => 268435456, 'inodes_remaining' => 10000, 'inode_reserve' => 100, 'quota_observed_at' => time(),
         'native_as_bytes' => 268435456, 'native_process_bytes' => 536870912, 'native_account_available_bytes' => 536870912,
         'request_work_seconds' => 20, 'worker_wall_seconds' => 20, 'cleanup_seconds' => 2,
         'native_cpu_seconds' => 10, 'native_file_bytes' => 16777216, 'php_work_bytes' => 67108864,

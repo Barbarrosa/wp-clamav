@@ -75,6 +75,13 @@ final class Application
         $state = (string) (($settings['state_dir'] ?? '') ?: ($settings['generation_dir'] ?? ''));
         if ($state === '') { $state = $base . '/native-state'; }
         $settings['state_dir'] = $state; $this->settings['state_dir'] = $state;
+        $operationalPaths = [$this->store->scratchDirectory()];
+        if ($coordinator !== null) { $operationalPaths[] = $coordinator->directory(); }
+        if (($settings['backend'] ?? 'local') === 'local') {
+            $operationalPaths[] = $state;
+            $operationalPaths[] = $this->settings['programs_dir'];
+        }
+        $this->policy->setOperationalPaths($operationalPaths);
         $current = [];
         $this->settings['expected_current_sha256'] = 'absent';
         $backendCertificates = !empty($settings['certificates_dir']) ? (string) $settings['certificates_dir'] : null;
