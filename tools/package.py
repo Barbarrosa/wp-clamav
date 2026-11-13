@@ -50,7 +50,7 @@ def main():
     if not re.search(r'\* Version:\s*' + re.escape(args.version) + r'\s*\n', main_php):
         parser.error('Plugin header and requested version differ')
     files = []
-    for folder in ('src', 'assets'):
+    for folder in ('src', 'assets', 'docs'):
         files.extend(p for p in (source / folder).rglob('*') if p.is_file())
     for name in ('wp-clamav.php', 'uninstall.php', 'README.md', 'readme.txt', 'LICENSE', 'COPYING.txt'):
         if (source / name).is_file():
