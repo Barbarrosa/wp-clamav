@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import shutil
 import subprocess
 import tarfile
@@ -15,6 +16,47 @@ import time
 import urllib.error
 import urllib.request
 import zipfile
+
+
+def run_php_bootstrap(code, stage, host='127.0.0.1:8081', timeout=180):
+    """WordPress wp_die may exit zero, so every bootstrap must reach its marker."""
+    if not re.fullmatch(r'[a-z0-9-]+', stage) or host not in ('127.0.0.1:8081', '127.0.0.1:8082'):
+        raise ValueError('Bootstrap identity must name a known disposable fixture.')
+    marker = '__WP_CLAMAV_CI_COMPLETE_' + stage + '__'
+    context = ("$_SERVER['HTTP_HOST']=" + json.dumps(host) + ";\n"
+               "$_SERVER['REQUEST_URI']='/';\n$_SERVER['REMOTE_ADDR']='127.0.0.1';\n")
+    command = ['php', '-r', context + code + '\necho ' + json.dumps('\n' + marker + '\n') + ';']
+    completed = subprocess.run(command, timeout=timeout, stdout=subprocess.PIPE,
+                               stderr=subprocess.STDOUT, text=True)
+    print(completed.stdout, end='', flush=True)
+    completed.check_returncode()
+    lines = completed.stdout.rstrip().splitlines()
+    if not lines or lines[-1] != marker:
+        raise RuntimeError('WordPress bootstrap did not complete: ' + stage)
+    return completed.stdout
+
+
+def require_php_suite(output, expected):
+    """A successful process, HTML error, or skipped fixture is not a passed suite."""
+    try:
+        report = json.loads(output)
+    except (TypeError, json.JSONDecodeError) as error:
+        raise RuntimeError('WordPress fixture did not return its complete JSON report: ' + expected) from error
+    if (not isinstance(report, dict) or report.get('suite') != expected
+            or report.get('result') != 'passed' or type(report.get('checks')) is not int
+            or report['checks'] < 1):
+        raise RuntimeError('WordPress fixture did not pass a nonempty expected suite: ' + expected)
+    return report
+
+
+def require_http_suite(output, expected_checks=142):
+    lines = output.rstrip().splitlines()
+    summary = (str(expected_checks) + ' real HTTP checks passed '
+               '(WordPress7.1.4/Forminator1.58.4; fixture backend only).')
+    if (not lines or lines[-1] != summary
+            or sum(line.startswith('PASS ') for line in lines) != expected_checks):
+        raise RuntimeError('Real WordPress HTTP fixture did not complete every expected check.')
+    return expected_checks
 
 
 def relative(name):
@@ -112,11 +154,10 @@ foreach (['forminator/forminator.php','wp-clamav/wp-clamav.php'] as $plugin) {
     $result=activate_plugin($plugin); if(is_wp_error($result)) { throw new RuntimeException($result->get_error_message()); }
 }
 """
-    subprocess.run(['php', '-r', setup], check=True, timeout=180)
+    run_php_bootstrap(setup, 'install-single')
     # Plugins activated after WordPress bootstrap need a fresh request before
     # invoking their APIs; this matches normal Forminator initialization.
-    subprocess.run(['php', '-r', "$_SERVER['HTTP_HOST']='127.0.0.1:8081'; require '/workspace/wp-integration-site/wp-load.php'; require '/workspace/wp-clamav/tests/wordpress/setup.php';"],
-                   check=True, timeout=180)
+    run_php_bootstrap("require '/workspace/wp-integration-site/wp-load.php'; require '/workspace/wp-clamav/tests/wordpress/setup.php';", 'setup-single')
     with (a.output / 'wordpress-server.log').open('w') as log:
         server = subprocess.Popen(['php', '-S', '127.0.0.1:8081', '-t', str(site),
                                    str(source / 'tests/wordpress/router.php')], stdout=log, stderr=log)
@@ -134,28 +175,33 @@ foreach (['forminator/forminator.php','wp-clamav/wp-clamav.php'] as $plugin) {
             with (a.output / 'wordpress-http.log').open('w') as results:
                 subprocess.run(['python3', str(source / 'tests/wordpress/integration_http.py')],
                                 check=True, stdout=results, stderr=subprocess.STDOUT)
+            require_http_suite((a.output / 'wordpress-http.log').read_text())
             test_env = os.environ.copy()
             test_env.update(WP_CLAMAV_WORDPRESS_DIR=str(site), WP_CLAMAV_HTTP_BASE='http://127.0.0.1:8081')
             for name in ('plugin-updates-wordpress.php', 'notifications-database.php', 'notifications-wordpress-http.php'):
                 with (a.output / (name + '.log')).open('w') as results:
                     subprocess.run(['php', str(source / 'tests' / name)], env=test_env,
                                    check=True, timeout=180, stdout=results, stderr=subprocess.STDOUT)
+                require_php_suite((a.output / (name + '.log')).read_text(), name.removesuffix('.php'))
             if a.multisite:
                 (multi / 'wp-content/plugins/wp-clamav').symlink_to(source, target_is_directory=True)
                 multi_values = dict(values, DB_NAME='wp_clamav_multisite_test')
                 multi_config = '<?php\n' + ''.join(f'define({json.dumps(k)}, {json.dumps(v)});\n' for k, v in multi_values.items())
                 settings = config[config.index("define('WP_CLAMAV_INTEGRATION_TEST'"):].replace(':8081', ':8082')
                 (multi / 'wp-config.php').write_text(multi_config + "define('WP_ALLOW_MULTISITE', true);\n" + settings)
-                populate = """$_SERVER['HTTP_HOST']='127.0.0.1:8082';define('WP_INSTALLING',true);
+                populate = """$_SERVER['HTTP_HOST']='127.0.0.1:8082';$_SERVER['REQUEST_URI']='/';define('WP_INSTALLING',true);
 require '/workspace/wp-multisite-integration-site/wp-load.php';
 require_once ABSPATH.'wp-admin/includes/upgrade.php';
 add_filter('pre_wp_mail','__return_true');
 wp_install('Multisite fixture','integration-admin','integration@example.invalid',false,'','integration-only-password');
+// Match wp-admin/network.php: a single-site bootstrap has not assigned the
+// network table properties, even though install_network() uses their schema.
+foreach($wpdb->tables('ms_global') as $table=>$prefixed){$wpdb->$table=$prefixed;}
 install_network();
 $result=populate_network(1,'127.0.0.1:8082','integration@example.invalid','Multisite fixture','/',false);
 if(is_wp_error($result)){throw new RuntimeException($result->get_error_message());}
 """
-                subprocess.run(['php', '-r', populate], check=True, timeout=180)
+                run_php_bootstrap(populate, 'populate-multisite', host='127.0.0.1:8082')
                 constants = """define('MULTISITE',true);
 define('SUBDOMAIN_INSTALL',false);
 define('DOMAIN_CURRENT_SITE','127.0.0.1:8082');
@@ -165,16 +211,17 @@ define('BLOG_ID_CURRENT_SITE',1);
 """
                 path = multi / 'wp-config.php'
                 path.write_text(path.read_text().replace("define('WP_ALLOW_MULTISITE', true);", "define('WP_ALLOW_MULTISITE', true);\n" + constants))
-                activate = """$_SERVER['HTTP_HOST']='127.0.0.1:8082';require '/workspace/wp-multisite-integration-site/wp-load.php';
+                activate = """$_SERVER['HTTP_HOST']='127.0.0.1:8082';$_SERVER['REQUEST_URI']='/';require '/workspace/wp-multisite-integration-site/wp-load.php';
 require_once ABSPATH.'wp-admin/includes/plugin.php'; add_filter('pre_wp_mail','__return_true');
 $result=activate_plugin('wp-clamav/wp-clamav.php','',true);
 if(is_wp_error($result)){throw new RuntimeException($result->get_error_message());}
 """
-                subprocess.run(['php', '-r', activate], check=True, timeout=180)
+                run_php_bootstrap(activate, 'activate-multisite', host='127.0.0.1:8082')
                 test_env['WP_CLAMAV_MULTISITE_WORDPRESS_DIR'] = str(multi)
                 with (a.output / 'application-multisite.log').open('w') as results:
                     subprocess.run(['php', str(source / 'tests/application-wordpress.php')], env=test_env,
                                    check=True, timeout=180, stdout=results, stderr=subprocess.STDOUT)
+                require_php_suite((a.output / 'application-multisite.log').read_text(), 'application-wordpress')
         finally:
             server.terminate()
             try:

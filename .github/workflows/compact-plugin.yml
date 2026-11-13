@@ -47,7 +47,7 @@ jobs:
       - name: PHP lint and contract tests
         run: |
           mkdir -p "$RUNNER_TEMP/logs"
-          docker exec compact-plugin sh -c 'find /workspace/wp-clamav -name "*.php" -type f -exec php -l {} \;' > "$RUNNER_TEMP/logs/php-lint.log" 2>&1
+          docker exec compact-plugin python3 /workspace/wp-clamav/tools/lint_php.py --source /workspace/wp-clamav > "$RUNNER_TEMP/logs/php-lint.log" 2>&1
           docker exec compact-plugin php -d zend.assertions=1 -d assert.exception=1 /workspace/wp-clamav/tests/run.php > "$RUNNER_TEMP/logs/php-contracts.log" 2>&1
           docker exec compact-plugin python3 -m unittest discover -s /workspace/wp-clamav/tools -p 'test_*.py' -v > "$RUNNER_TEMP/logs/package-tests.log" 2>&1
       - name: Real WordPress and Forminator upload lifecycle
@@ -59,6 +59,7 @@ jobs:
         env:
           RELEASE_CHANNEL: ${{ inputs.channel || 'preview' }}
         run: |
+          mkdir -p "$RUNNER_TEMP/release"
           python3 - <<'PY'
           import json,os,pathlib
           p=pathlib.Path(os.environ['RUNNER_TEMP'])/'qualification.json'
