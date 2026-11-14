@@ -5,6 +5,17 @@ namespace WPClamAV\Notifications;
 
 final class AssetPolicy
 {
+    private static function incomplete(array $event): bool
+    {
+        $reasons = $event['reason_codes'] ?? [];
+        if (!is_array($reasons)) { return true; }
+        foreach ($reasons as $reason) {
+            if (!is_string($reason) || in_array($reason, ['scan-limit-encryption-or-parser-alert', 'parser-error',
+                'encrypted-content', 'unknown-or-unsupported-layer'], true)) { return true; }
+        }
+        return false;
+    }
+
     /** A review download is not an upload-publication decision. */
     public static function eligible(array $event, array $receipt, ?array $latest): bool
     {
@@ -18,9 +29,11 @@ final class AssetPolicy
             && ($status !== 'clean' || (($event['applicability_proven'] ?? false) === true
                 && ($event['coverage_qualified'] ?? false) === true))
             && ($event['completed'] ?? false) === true
+            && !self::incomplete($event)
             && $latest !== null
             && $latestId === $eventId
             && ($latest['completed'] ?? false) === true
+            && !self::incomplete($latest)
             && in_array((string) ($latest['status'] ?? ''), ['clean', 'detected', 'held'], true)
             && preg_match('/\A[0-9a-f]{64}\z/D', (string) ($event['sha256'] ?? '')) === 1
             && hash_equals((string) $event['sha256'], (string) ($receipt['sha256'] ?? ''))

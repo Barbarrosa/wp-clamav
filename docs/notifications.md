@@ -10,6 +10,8 @@ Original sharing requires a completely preserved, undeleted original, a complete
 
 Failed, incomplete, interrupted, stale, changed, or missing originals never produce original attachments, embeds, or download capabilities. The check applies to preparation, the final mail boundary, resend, OTP requests and download. A new assessment immediately makes older sharing capabilities unusable. Reconciliation of an older event cannot revoke a newer valid grant or give the older event newer permissions.
 
+Native limit, parser, encrypted-content and unknown-layer warnings withhold assets even when a protocol envelope reports `completed` or contains a detection. These events can still send result-only notifications. An expansion-limit heuristic is not evidence that every member was scanned.
+
 Attachments are verified private temporary copies removed when the synchronous mail call ends. Their size limit comes from the resource policy, including base64 line wrapping and PHP mail-assembly memory. Unknown or insufficient attachment capacity gives a text-only message or the independently enabled review link; it never silently enables a link.
 
 ## Email verification

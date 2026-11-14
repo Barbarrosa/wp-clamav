@@ -135,6 +135,21 @@ try {
     notification_check(count($state->messages) === 4, 'audited manual resend creates a new delivery');
     notification_throws(fn() => $manager->resend($event['id'], $rule['id'], '', ''), 'resend actor/reason required');
 
+    // Native heuristic detections may include a completed protocol envelope
+    // while explicitly reporting unscanned content. Asset checks must honor
+    // those warnings, including a resource-limit detection.
+    foreach (['detected', 'held'] as $status) {
+        foreach (['scan-limit-encryption-or-parser-alert', 'parser-error', 'encrypted-content', 'unknown-or-unsupported-layer'] as $reason) {
+            extract(notification_fixture($status, true, true));
+            $event['reason_codes'] = [$reason]; $store->events[$event['id']] = $event;
+            $manager->onEvent($event); $manager->runQueue();
+            notification_check(count($state->messages) === 1, 'incomplete native findings still send a result report');
+            notification_check($state->messages[0]['attachments'] === [] && !$state->messages[0]['asset_eligible'], 'incomplete native findings cannot attach originals');
+            notification_check($repository->grants === [] && !str_contains($state->messages[0]['body'], 'https://example.test/'), 'incomplete native findings cannot create review links');
+            notification_check($store->opens === 0 && $state->attachmentChecks === 0, 'limit reports never copy or open originals for notification');
+        }
+    }
+
     // OTP is queued, short-lived only from actual dispatch, one use, and does not buffer/download on GET.
     extract(notification_fixture());
     $manager->onEvent($event); $manager->runQueue();
