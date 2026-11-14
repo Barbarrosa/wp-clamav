@@ -118,6 +118,8 @@ final class ConstraintCatalog
         }
         foreach ([
             'metadata_record_bytes' => [1048576, 'bytes', 'canonical-json-record', 'Application format/read ceiling, not a hosting quota'],
+            'maintenance_cpu_reserve_fraction' => [0.20, 'ratio', 'native-cpu-windows', 'Policy reserves20percent of allocated rolling CPU for maintenance; public-origin queued scans remain scan work'],
+            'minimum_scan_charge_seconds' => [1, 'seconds', 'scan-cpu-pacing', 'Policy minimum scan charge prevents unbounded free trivial work'],
             'minimum_headroom_fraction' => [0.20, 'ratio', 'work-reserve', 'Implementation minimum safety headroom; measured variability can increase it'],
             'cpu_monthly_window_seconds' => [2678400, 'seconds', 'cpu-accounting', 'Conservative rolling 31-day accounting, separate from provider calendar-month references'],
         ] as $key => [$value, $unit, $scope, $source]) {

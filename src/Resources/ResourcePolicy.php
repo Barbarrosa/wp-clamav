@@ -16,11 +16,14 @@ final class ResourcePolicy
     private ?QuotaSnapshot $quota = null;
     private ?WorkLedger $work = null;
     private array $operationalPaths = [];
+    private ?\Closure $workClock;
+    private ?float $deadlineMonotonic = null;
 
-    public function __construct(private array $settings = [], ?array $observed = null)
+    public function __construct(private array $settings = [], ?array $observed = null, ?callable $workClock = null)
     {
         $this->budgets = is_array($settings['budgets'] ?? null) ? $settings['budgets'] : [];
         $this->observed = $observed ?? self::detect();
+        $this->workClock = $workClock === null ? null : \Closure::fromCallable($workClock);
     }
 
     public function bindStore(FileSubmissionStore $store, ?FileSubmissionStore $coordinator = null): void
@@ -29,7 +32,31 @@ final class ResourcePolicy
         if ($coordinator !== null || $this->coordinator === null) { $this->coordinator = $coordinator ?? $store; }
         new OperationalStorage($this->operationalPaths, [$store->directory()]);
         $this->quota = new QuotaSnapshot($store, $this->budgets, fn(): array => $this->operationalUsage());
-        $this->work = new WorkLedger($this->coordinator, $this->budgets);
+        $this->work = new WorkLedger($this->coordinator, $this->budgets, $this->workClock);
+    }
+
+    /** Epoch clock shared by admission and durable queue retry decisions. */
+    public function now(): int
+    {
+        $now = $this->workClock === null ? time() : ($this->workClock)();
+        if (!is_int($now) || $now < 0 || $now > 0xffffffff - 60) { throw new \RuntimeException('Unsupported resource-policy clock.'); }
+        return $now;
+    }
+
+    /** Nested work may shorten an enclosing deadline, never extend it. */
+    public function withDeadline(float $monotonic, callable $operation): mixed
+    {
+        if (!is_finite($monotonic) || $monotonic < 0) { throw new \InvalidArgumentException('Invalid monotonic work deadline.'); }
+        $previous = $this->deadlineMonotonic;
+        $this->deadlineMonotonic = $previous === null ? $monotonic : min($previous, $monotonic);
+        try { return $operation(); }
+        finally { $this->deadlineMonotonic = $previous; }
+    }
+
+    private function deadlineWall(?float $wall): ?float
+    {
+        if ($wall === null || $this->deadlineMonotonic === null) { return $wall; }
+        return min($wall, max(0, $this->deadlineMonotonic - hrtime(true) / 1e9));
     }
 
     /** Roots outside retained namespaces; missing future directories are observed as zero. */
@@ -78,11 +105,47 @@ final class ResourcePolicy
         });
     }
 
-    public function beginNative(string $job, array $limits): ?string
+    public function acquireDispatch(string $kind = 'scan'): DispatchLease
     {
-        if ($this->work === null) { return null; }
+        if (!in_array($kind, ['scan', 'maintenance'], true)) { throw new \InvalidArgumentException('Unknown dispatch class.'); }
+        if ($this->coordinator === null) { throw new ResourceDeferred('coordination_unbound', $this->now() + 60); }
+        if ($kind === 'scan' && MaintenanceIntent::until($this->coordinator) > $this->now()) {
+            throw new ResourceDeferred('maintenance_pending', $this->now() + 60);
+        }
+        $lease = DispatchLease::acquire($this->coordinator);
+        if ($kind === 'scan' && MaintenanceIntent::until($this->coordinator) > $this->now()) {
+            $lease->release();
+            throw new ResourceDeferred('maintenance_pending', $this->now() + 60);
+        }
+        return $lease;
+    }
+
+    public function signalMaintenance(): string
+    {
+        if ($this->coordinator === null) { throw new ResourceDeferred('coordination_unbound', $this->now() + 60); }
+        // Cover the plugin's next half-hour worker and a currently admitted scan.
+        $seconds = (int) ceil(max(1800, $this->budget('worker_wall_seconds') ?? 0)) + 60;
+        if ($seconds > 2678400 || $this->now() + $seconds > 0xffffffff - 60) { throw new \RuntimeException('Maintenance priority lifetime is outside policy bounds.'); }
+        return MaintenanceIntent::signal($this->coordinator, $this->now(), $seconds);
+    }
+
+    public function finishMaintenanceIntent(?string $token): void
+    {
+        if ($token !== null && $this->coordinator !== null) { MaintenanceIntent::finish($this->coordinator, $token); }
+    }
+
+    public function beginScan(string $job, array $limits): string
+    {
+        if ($this->work === null) { throw new ResourceDeferred('coordination_unbound', time() + 60); }
+        return $this->work->reserve($job, max((float) ($limits['cpu_seconds'] ?? 0), (float) $limits['wall_seconds']),
+            (float) $limits['wall_seconds'] + (float) ($this->budget('cleanup_seconds') ?? 0), 'scan');
+    }
+
+    public function beginNative(string $job, array $limits): string
+    {
+        if ($this->work === null) { throw new ResourceDeferred('coordination_unbound', time() + 60); }
         return $this->work->reserve($job, max((float) $limits['cpu_seconds'], (float) $limits['wall_seconds']),
-            (float) $limits['wall_seconds'] + (float) ($this->budget('cleanup_seconds') ?? 0));
+            (float) $limits['wall_seconds'] + (float) ($this->budget('cleanup_seconds') ?? 0), 'maintenance');
     }
 
     public function finishNative(?string $token, ?float $cpuSeconds): void
@@ -95,10 +158,16 @@ final class ResourcePolicy
         if ($value === null || $value === '' || $value === '-1' || $value === -1) { return null; }
         if (!is_int($value) && !is_string($value)) { throw new \InvalidArgumentException('A byte limit must be an integer or PHP size string.'); }
         if (!preg_match('/\A([0-9]+)\s*([KMGTP]?)B?\z/iD', trim((string) $value), $match)) { throw new \InvalidArgumentException('Invalid byte limit.'); }
+        $number = 0;
+        for ($index = 0, $length = strlen($match[1]); $index < $length; ++$index) {
+            $digit = ord($match[1][$index]) - 48;
+            if ($number > intdiv(PHP_INT_MAX - $digit, 10)) { throw new \InvalidArgumentException('Byte limit overflows this PHP build.'); }
+            $number = $number * 10 + $digit;
+        }
         $factor = 1024 ** (strpos(' KMGTP', strtoupper($match[2])) ?: 0);
-        $result = (float) $match[1] * $factor;
-        if ($result > PHP_INT_MAX) { throw new \InvalidArgumentException('Byte limit overflows this PHP build.'); }
-        return $zeroUnlimited && $result == 0 ? null : (int) $result;
+        if ($number > intdiv(PHP_INT_MAX, $factor)) { throw new \InvalidArgumentException('Byte limit overflows this PHP build.'); }
+        $result = $number * $factor;
+        return $zeroUnlimited && $result === 0 ? null : $result;
     }
 
     public static function detect(): array
@@ -127,7 +196,7 @@ final class ResourcePolicy
     {
         $v = $this->budgets[$key] ?? null;
         if ($v === null || $v === '') { return null; }
-        if (!is_numeric($v) || !is_finite((float) $v) || (float) $v < 0) { throw new \InvalidArgumentException('Invalid resource allocation: ' . $key); }
+        if (!is_numeric($v) || !is_finite((float) $v) || (float) $v < 0 || (float) $v >= PHP_INT_MAX) { throw new \InvalidArgumentException('Invalid resource allocation: ' . $key); }
         return (float) $v;
     }
     private static function minimum(array $values): ?float
@@ -213,19 +282,12 @@ final class ResourcePolicy
         $as = $this->budget('native_as_bytes');
         $provider = $this->budget('native_process_bytes');
         $account = $this->budget('native_account_available_bytes');
-        // Virtual address space and resident memory have different scopes.
-        $limits = [$as];
-        $resident = self::minimum([$provider, $account]);
-        $conservativeAs = $resident === null ? null : $resident * 0.8;
-        if ($as !== null && $conservativeAs !== null && $as > $conservativeAs) {
-            $measuredRss = $this->budget('measured_native_rss_bytes');
-            $variation = $this->budget('measured_native_rss_variation_bytes') ?? 0;
-            if ($measuredRss === null || $measuredRss + $this->margin($measuredRss, $variation) > $resident) {
-                throw new \RuntimeException('Qualify native RSS separately before using an address-space cap above the conservative resident budget.');
-            }
-        } elseif ($as === null && $resident !== null) {
-            $limits[] = $conservativeAs;
+        // Historical measurements cannot bound allocations made by hostile future inputs.
+        if ($provider === null || $account === null || $provider <= 0 || $account <= 0) {
+            throw new ResourceDeferred('resident_allocation_unknown', time() + 60);
         }
+        $resident = min($provider, $account);
+        $limits = [$as, floor($resident * 0.8)];
         $inherited = $this->value('soft totalmem');
         if (is_numeric($inherited)) { $limits[] = (float) $inherited; }
         $as = self::minimum($limits);
@@ -236,13 +298,14 @@ final class ResourcePolicy
             $wall = self::minimum([$wall, $this->budget('proxy_remaining_seconds')]);
         }
         $cleanup = $this->budget('cleanup_seconds');
+        $wall = $this->deadlineWall($wall);
         $cpu = $this->budget('native_cpu_seconds');
         $file = $this->budget('native_file_bytes');
-        if ($as === null || $as <= 0 || $wall === null || $wall <= 0 || $cleanup === null || $cpu === null || $cpu <= 0 || $file === null || $file <= 0) {
-            throw new \RuntimeException('Native work is held: configure verified address-space, wall/CPU, cleanup and scratch-file bounds in Diagnostics.');
+        if ($as === null || $as <= 0 || $wall === null || $cleanup === null || $cpu === null || $cpu <= 0 || $file === null || $file <= 0) {
+            throw new ResourceDeferred('native_limits_unknown', time() + 60);
         }
         $wall -= $cleanup;
-        if ($wall < 1) { throw new \RuntimeException('Insufficient time remains for a bounded scan and durable cleanup.'); }
+        if ($wall < 1) { throw new ResourceDeferred('deadline_exhausted', time() + 60); }
         $cpuRemaining = $this->budget('cpu_remaining_seconds');
         if ($cpuRemaining !== null) { $cpu = min($cpu, $cpuRemaining); }
         if ($this->work !== null) {
@@ -250,9 +313,9 @@ final class ResourcePolicy
                 if ($window['remaining_seconds'] !== null) { $cpu = min($cpu, $window['remaining_seconds']); }
             }
         }
-        if ($cpu < 1) { throw new \RuntimeException('The allocated native CPU allowance is exhausted.'); }
+        if ($cpu < 1) { throw new ResourceDeferred('cpu_allocation_exhausted', time() + 60); }
         $output = (int) min(1048576, $as / 64, $this->phpHeadroom() / 8);
-        if ($output < 4096) { throw new \RuntimeException('PHP has insufficient protocol-buffer headroom.'); }
+        if ($output < 4096) { throw new ResourceDeferred('php_headroom_exhausted', time() + 60); }
         return ['as_bytes' => (int) $as, 'cpu_seconds' => (int) floor($cpu), 'wall_seconds' => $wall, 'file_bytes' => (int) $file, 'output_bytes' => $output];
     }
 
@@ -276,9 +339,11 @@ final class ResourcePolicy
             }
             $wall = self::minimum([$wall, $this->budget('proxy_remaining_seconds')]);
         }
-        if ($wall === null || $cleanup === null || $wall - $cleanup < 1) { throw new \RuntimeException('Configure a bounded remote work deadline and cleanup allowance.'); }
+        $wall = $this->deadlineWall($wall);
+        if ($wall === null || $cleanup === null) { throw new ResourceDeferred('remote_limits_unknown', time() + 60); }
+        if ($wall - $cleanup < 1) { throw new ResourceDeferred('deadline_exhausted', time() + 60); }
         $output = (int) min(1048576, $this->phpHeadroom() / 8);
-        if ($output < 4096) { throw new \RuntimeException('Insufficient PHP protocol-buffer headroom.'); }
+        if ($output < 4096) { throw new ResourceDeferred('php_headroom_exhausted', time() + 60); }
         return ['wall_seconds' => $wall - $cleanup, 'output_bytes' => $output];
     }
 

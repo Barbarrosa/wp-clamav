@@ -17,4 +17,5 @@ interface SubmissionStore
     public function listEvents(int $limit = 50, int $offset = 0): array;
     public function delete(string $id, int $actor, string $reason): void;
     public function commitSubmission(string $id, array $fields, array $receiptIds = []): void;
+    public function submission(string $id): array;
 }

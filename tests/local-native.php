@@ -43,10 +43,18 @@ $settings = ['budgets' => [
     'worker_wall_seconds' => 65, 'request_work_seconds' => 65, 'cleanup_seconds' => 5,
     'native_file_bytes' => 512 * 1048576, 'php_work_bytes' => 67108864,
 ]];
+$workNow = time();
+$workClock = static function () use (&$workNow): int { return $workNow; };
 $policy = new ResourcePolicy($settings, [
     'upload_max_filesize' => ['value' => '16M'], 'post_max_size' => ['value' => '32M'],
     'memory_limit' => ['value' => '128M'], 'max_execution_time' => ['value' => 0],
-]);
+], $workClock);
+// Functional engine cases are separate admitted jobs. Move only the trusted
+// ledger clock between them; real process CPU, RAM and wall limits still apply.
+$assess = static function (IntakeService $service, ResourcePolicy $resources, string $id) use (&$workNow): array {
+    $workNow = max($workNow, (int) ceil($resources->diagnostics()['cpu_accounting']['scan_next_at'] ?? 0));
+    return $service->assess($id);
+};
 $store = new FileSubmissionStore($root . '/private', [],
     static fn($n, $usage, $context) => $policy->admitStorage($root, $n, $usage, $context));
 $repository = new NotificationMemoryRepository();
@@ -77,7 +85,7 @@ try {
         $stream = $store->open($receipt['id']);
         try { $check(hash('sha256', stream_get_contents($stream)) === $receipt['sha256'], $name . ' private bytes match its receipt'); }
         finally { fclose($stream); }
-        $event = $intake->assess($receipt['id']);
+        $event = $assess($intake, $policy, $receipt['id']);
         $events[$status] = $event;
         $check($event['status'] === $status, $name . ' actual native disposition is ' . $status . ': ' . json_encode($event));
         $check($event['sha256'] === $receipt['sha256'] && $event['size'] === $receipt['size'], $name . ' actual native result binds the preserved original');
@@ -95,10 +103,10 @@ try {
         $fullSettings = $settings;
         $fullSettings['budgets'] = array_replace($settings['budgets'], ['native_as_bytes' => 2147483648,
             'native_process_bytes' => 3221225472, 'native_account_available_bytes' => 3221225472]);
-        $fullPolicy = new ResourcePolicy($fullSettings);
+        $fullPolicy = new ResourcePolicy($fullSettings, null, $workClock);
         $check($fullPolicy->nativeLimits(false)['as_bytes'] === 2147483648, 'full-profile fixture explicitly uses2GiB address space only in CI');
         $fullIntake = new IntakeService($store, $backend, $fullPolicy, 'full', $notify);
-        $full = $fullIntake->assess($receipts['clean']['id']);
+        $full = $assess($fullIntake, $fullPolicy, $receipts['clean']['id']);
         $check($full['status'] === 'clean' && $full['completed'] === true, 'actual full-profile clean PDF completes under its explicit CI envelope: ' . json_encode($full));
         $check($full['generation_id'] === $generation && $full['sha256'] === $receipts['clean']['sha256'], 'full-profile result binds the same authentic generation and original');
         $check($full['requested_profile'] === 'full' && $full['effective_profile'] === 'full', 'native full scan does not silently substitute the reduced profile');
@@ -119,7 +127,7 @@ try {
         chmod($broken, 0500);
         $faultyBackend = new LocalBackend($broken, $env['STATE'], $store->scratchDirectory(), null, $env['CERTS'], $maxAge);
         $faultyIntake = new IntakeService($store, $faultyBackend, $policy, 'pdf-jpeg-png-pe-exclusions', $notify);
-        $failed = $faultyIntake->assess($cleanId);
+        $failed = $assess($faultyIntake, $policy, $cleanId);
         $check($failed['status'] === 'failed' && !$failed['completed'], $case . ' native process output produces no approved result');
         $check(!$faultyIntake->canPublish($cleanId), $case . ' attempt revokes the earlier actual-native clean capability');
         $check($store->event($events['clean']['id'])['status'] === 'clean', $case . ' attempt preserves immutable earlier scanner evidence');

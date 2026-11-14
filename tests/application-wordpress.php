@@ -20,6 +20,7 @@ if (!defined('WP_CLAMAV_INTEGRATION_TEST') || WP_CLAMAV_INTEGRATION_TEST !== tru
 }
 
 use WPClamAV\Application;
+use WPClamAV\Resources\ResourcePolicy;
 use WPClamAV\Scanning\ScannerBackend;
 use WPClamAV\Storage\Files;
 use WPClamAV\WordPress\Plugin;
@@ -56,6 +57,7 @@ $switchDepth = count($GLOBALS['_wp_switched_stack'] ?? []);
 $siteId = null;
 $mainReceiptIds = [];
 $mail = [];
+$clock = (object) ['now' => time()];
 $mailGuard = static function ($result, array $attributes) use (&$mail): bool { $mail[] = $attributes; return true; };
 add_filter('pre_wp_mail', $mailGuard, PHP_INT_MAX, 2);
 $backend = new class implements ScannerBackend {
@@ -71,6 +73,8 @@ $backend = new class implements ScannerBackend {
 };
 $backendFilter = static fn($configured, array $settings): ScannerBackend => $backend;
 add_filter('wp_clamav_backend', $backendFilter, 10, 2);
+$resourceFilter = static fn($configured, array $settings): ResourcePolicy => new ResourcePolicy($settings, null, static fn(): int => $clock->now);
+add_filter('wp_clamav_resource_policy', $resourceFilter, PHP_INT_MAX, 2);
 
 try {
     // Never run this against the separate single-site fixture or reuse a real blog.
@@ -87,9 +91,10 @@ try {
         'budgets' => ['storage_bytes' => 3145728, 'storage_reserve_bytes' => 65536, 'update_reserve_bytes' => 65536,
             'account_remaining_bytes' => 67108864, 'inodes_remaining' => 10000, 'quota_observed_at' => time(),
             'file_bytes' => 2097152, 'php_work_bytes' => 33554432, 'native_as_bytes' => 134217728,
+            'native_process_bytes' => 268435456, 'native_account_available_bytes' => 536870912,
             'native_cpu_seconds' => 5, 'native_file_bytes' => 2097152, 'worker_wall_seconds' => 6,
             'request_work_seconds' => 6, 'cleanup_seconds' => 1, 'worker_batch_files' => 20,
-            'cpu_hourly_seconds' => 5, 'cpu_daily_seconds' => 10, 'cpu_monthly_seconds' => 20,
+            'cpu_hourly_seconds' => 10, 'cpu_daily_seconds' => 20, 'cpu_monthly_seconds' => 40,
             'mail_recipient_hourly' => 3, 'mail_provider_hourly' => 3, 'mail_reserve_hourly' => 1, 'other_mail_hourly' => 0,
             'mail_message_bytes' => 1048576, 'mail_php_bytes' => 2097152,
             'mail_message_overhead_bytes' => 4096, 'mail_memory_multiplier' => 3]]);
@@ -147,6 +152,8 @@ try {
         'applicability_proven' => false, 'coverage_qualified' => false, 'requested_profile' => 'full',
         'effective_profile' => 'full', 'findings' => [], 'reason_codes' => ['scan_in_progress']]);
     $check(!$restored->intake->canPublish($first['id']), 'interrupted scan remains private before worker recovery');
+    $recoveryIntent = $restored->queueScan($first['id']);
+    $check($recoveryIntent['status'] === 'queued', 'interrupted receipt has durable recovery intent even when a prior quota refusal requires index repair');
     $lockPath = $restored->store->directory() . '/locks/scan-' . $first['id'];
     $lock = fopen($lockPath, 'c+b');
     if ($lock === false || !chmod($lockPath, 0600) || !flock($lock, LOCK_EX | LOCK_NB)) {
@@ -155,9 +162,12 @@ try {
     try {
         $busy = $restored->runQueue();
         $check($busy['scanned'] === 0 && $busy['held'] === 1 && $backend->calls === 0,
-            'worker does not duplicate a scan whose per-receipt lock is still owned');
+            'worker does not duplicate a scan whose per-receipt lock is still owned: ' . json_encode($busy));
         $check($restored->store->latestEvent($first['id'])['id'] === $interrupted['id'], 'busy scan lock leaves the canonical interrupted event intact');
     } finally { flock($lock, LOCK_UN); fclose($lock); }
+    $waiting = $restored->runQueue();
+    $check($waiting['scanned'] === 0 && $backend->calls === 0, 'releasing a busy receipt does not bypass its durable retry deadline');
+    $clock->now += 60;
     $recovered = $restored->runQueue();
     $terminal = $restored->store->latestEvent($first['id']);
     $check($recovered['scanned'] === 1 && $backend->calls === 1 && $terminal['status'] === 'clean',
@@ -177,13 +187,33 @@ try {
         'worker replays terminal notification work without rescanning the original');
     $check($mail === [], 'empty network notification rules do not send mail during queue recovery');
 
+    $charged = $restored->policy->diagnostics()['cpu_accounting'];
+    $check($charged['windows']['hourly']['used_seconds'] > 0 && $charged['windows']['hourly']['scan_used_seconds'] > 0,
+        'the successful fixture scan passes real shared CPU accounting without a test bypass');
+    // This phase tests a fresh shared maintenance reservation independently of
+    // the preceding scan's legitimate charge and pacing. Advance the trusted
+    // fixture clock past the longest rolling window; never rewrite CPU history.
+    $clock->now += 2678400 + 120;
+    $fresh = $other->policy->diagnostics()['cpu_accounting'];
+    $check($fresh['windows']['monthly']['used_seconds'] === 0.0 && $fresh['pending_reservations'] === 0,
+        'advancing beyond 31 days expires only operational CPU counters');
+    $check($restored->store->get($first['id'])['sha256'] === hash('sha256', $original)
+        && is_file($restored->store->directory() . '/objects/' . $first['id']), 'CPU window expiry retains the canonical original and receipt');
+    // Use a five-second total account allocation for the isolated maintenance
+    // reservation phase. Both blogs reload that same confirmed policy; the
+    // earlier counters expired by time, rather than by changing configuration.
+    $config['budgets']['cpu_hourly_seconds'] = 5;
+    $config['budgets']['cpu_daily_seconds'] = 10;
+    $config['budgets']['cpu_monthly_seconds'] = 20;
+    update_site_option(Settings::OPTION, $config); Plugin::reset(); $restored = Plugin::app();
+    switch_to_blog($siteId); $other = Plugin::app(); restore_current_blog();
     $limits = $restored->policy->nativeLimits(false);
     $reservation = $restored->policy->beginNative('multisite:shared-fixture', $limits);
     $check(is_string($reservation) && is_file($root . '/account-control/cpu-budget.json'), 'native reservation is durable in the shared account coordinator');
     $otherCpu = $other->policy->diagnostics()['cpu_accounting'];
-    $check($otherCpu['pending_reservations'] === 1 && $otherCpu['windows']['hourly']['remaining_seconds'] === 0.0,
-        'second blog observes CPU reserved by the first blog');
-    $rejects(fn() => $other->policy->nativeLimits(false), 'second blog cannot reuse the first blog CPU allowance', 'CPU allowance is exhausted');
+    $check($otherCpu['pending_reservations'] === 1 && (float) $otherCpu['windows']['hourly']['remaining_seconds'] === 0.0,
+        'second blog observes CPU reserved by the first blog: ' . json_encode($otherCpu));
+    $rejects(fn() => $other->policy->nativeLimits(false), 'second blog cannot reuse the first blog CPU allowance', 'cpu_allocation_exhausted');
     $restored->policy->finishNative($reservation, 1.25);
     $settled = $other->policy->diagnostics()['cpu_accounting'];
     $check($settled['pending_reservations'] === 0 && $settled['windows']['hourly']['remaining_seconds'] === 3.75,
@@ -205,6 +235,7 @@ try {
 } finally {
     while (count($GLOBALS['_wp_switched_stack'] ?? []) > $switchDepth) { restore_current_blog(); }
     remove_filter('wp_clamav_backend', $backendFilter, 10);
+    remove_filter('wp_clamav_resource_policy', $resourceFilter, PHP_INT_MAX);
     Plugin::reset();
     $oldSettings === null ? delete_site_option(Settings::OPTION) : update_site_option(Settings::OPTION, $oldSettings);
     // Only rows and the blog created by this run are disposable; leave main-site tables intact.

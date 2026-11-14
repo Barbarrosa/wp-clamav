@@ -5,6 +5,7 @@ import hashlib
 import http.cookiejar
 import json
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -65,7 +66,9 @@ def request(path, *, fields=None, files=None, raw=None, headers=None, auth=False
 
 
 def route(name, **kwargs):
-    return request('/?rest_route=/wp-clamav-tests/v1/' + name, headers={'X-WP-ClamAV-Test': TOKEN}, **kwargs)
+    headers = {'X-WP-ClamAV-Test': TOKEN}
+    headers.update(kwargs.pop('headers', {}))
+    return request('/?rest_route=/wp-clamav-tests/v1/' + name, headers=headers, **kwargs)
 
 
 def state():
@@ -123,36 +126,161 @@ def core_uploads():
                 private_and_absent(content, 'REST ' + mode + ' ' + status.lower())
 
 
-def nonce(form_id):
-    code, result = route('nonce&form_id=' + str(form_id))
+def nonce(form_id, kind='submit'):
+    code, result = route('nonce&form_id=' + str(form_id) + '&kind=' + kind)
     check(code == 200 and bool(result.get('nonce')), 'nonce available for fixture form')
     return result['nonce']
 
 
-def submit_form(mode, contents, token=None, missing=False):
+def submit_form(mode, contents, token=None, missing=False, *, tokens=None, native_files=None,
+                extra_fields=None, headers=None, padding='', expect_mail=True):
     form_id = FIXTURE['forms'][mode]
-    narrative = RUN + ' written narrative ' + mode + ' ' + uuid.uuid4().hex
+    narrative = RUN + ' written narrative ' + mode + ' ' + uuid.uuid4().hex + padding
     fields = {'action': 'forminator_submit_form_custom-forms', 'form_id': form_id,
               'forminator_nonce': nonce(form_id), 'text-1': narrative, 'page_id': '0',
               'current_url': BASE + '/', 'referer_url': BASE + '/', 'form_type': 'custom-forms'}
     files = []
-    if mode == 'ajax' and token:
-        fields['forminator-multifile-hidden'] = json.dumps({'upload-1_fixture': [{'success': True, 'access_token': token,
-            'file_name': 'evidence.png', 'mime_type': 'image/png', 'file_id': 'fixture'}]})
+    if mode == 'ajax' and (token or tokens):
+        fields['forminator-multifile-hidden'] = json.dumps({'upload-1_fixture': [{'success': True, 'access_token': t,
+            'file_name': 'evidence.png', 'mime_type': 'image/png', 'file_id': 'fixture', 'scanner_warnings': []}
+            for t in (tokens if tokens is not None else [token])]})
     elif not missing:
         key = 'upload-1' if mode == 'single' else 'upload-1[]'
         files = [(key, RUN + '-' + mode + '-' + str(i) + '.png', c) for i, c in enumerate(contents)]
-    code, result = request('/wp-admin/admin-ajax.php', fields=fields, files=files)
+    if native_files is not None:
+        files = native_files
+    fields.update(extra_fields or {})
+    if fields.get('abandoned_form'):
+        fields['forminator_abandonment_nonce'] = nonce(form_id, 'abandonment')
+    code, result = request('/wp-admin/admin-ajax.php', fields=fields, files=files, headers=headers)
     check(code == 200 and result.get('success') is True and result.get('data', {}).get('success') is True,
           'Forminator ' + mode + ' acknowledges narrative', result)
     current = state()
     manifests = [s for s in current['submissions'] if narrative in json.dumps(s)]
     check(len(manifests) == 1, 'Forminator ' + mode + ' canonical narrative persists once')
     mails = [m for m in current['mail'] if narrative in m.get('message', '')]
-    check(bool(mails), 'Forminator ' + mode + ' narrative mail is retained independently')
+    if expect_mail:
+        check(bool(mails), 'Forminator ' + mode + ' narrative mail is retained independently')
+    else:
+        check(not mails, 'Forminator ' + mode + ' respects vendor suppression of non-final narrative mail')
     check(all(not m.get('attachments') for m in mails), 'Forminator ' + mode + ' native narrative mail has no original attachments')
     check(all('wp-content/uploads/' not in m.get('message', '') for m in mails), 'Forminator ' + mode + ' native narrative mail has no public attachment URLs')
     return manifests[0]
+
+
+REAL_CLOCK = {'X-WP-ClamAV-Test': TOKEN, 'X-WP-ClamAV-Test-Clock': 'real'}
+
+
+def dispatches_for(ids):
+    return [d for d in state()['dispatches'] if d['id'] in ids]
+
+
+def verify_held_manifest(manifest, count, reason):
+    ids = manifest['receipt_ids']
+    check(len(ids) == count, reason + ' preserves every received original reference')
+    check(manifest['fields']['scan_receipt_ids'] == [], reason + ' commits no automatic native eligibility')
+    for _ in range(2):
+        route('queue', fields={}, headers=REAL_CLOCK)
+    for receipt_id in ids:
+        code, event = route('assess', fields={'id': receipt_id, 'submission_id': manifest['id']}, headers=REAL_CLOCK)
+        check(code == 200 and event.get('status') == 'held', reason + ' remains held when automatic assessment is requested', event)
+    check(dispatches_for(ids) == [], reason + ' never dispatches the scanner backend')
+    receipts = {r['id']: r for r in state()['receipts']}
+    check(all(receipts[r]['complete'] and not receipts[r].get('deleted_at') for r in ids), reason + ' retains complete private originals')
+    check(all(not any(p['sha256'] == receipts[r]['sha256'] and (receipts[r]['size'] > 0 or RUN in p['name'])
+                      for p in state()['public_files']) for r in ids), reason + ' publishes no original')
+
+
+def upload_ajax(content, label):
+    form_id = FIXTURE['forms']['ajax']
+    code, result = request('/wp-admin/admin-ajax.php', fields={'action': 'forminator_multiple_file_upload',
+        'form_id': form_id, 'element_id': 'upload-1', 'nonce': nonce(form_id), 'totalFiles': '0'},
+        files=[('upload-1', RUN + '-' + label + '.png', content)], headers=REAL_CLOCK)
+    check(code == 200 and result.get('success') is True, 'AJAX original is received independently of client totalFiles', result)
+    token = result['data']['access_token']
+    return token, token.split('.')[0]
+
+
+def forminator_lifecycle():
+    cases = [
+        ('draft', {'save_draft': 'true'}, {}, 'draft'),
+        ('abandoned', {'abandoned_form': 'true'}, {}, 'abandoned'),
+        ('spam', {}, {'X-WP-ClamAV-Test-Lifecycle': 'spam'}, 'spam'),
+        ('preview', {'action': 'forminator_submit_preview_form_custom-forms'}, {}, 'active'),
+    ]
+    for label, fields, headers, expected_status in cases:
+        token, receipt_id = upload_ajax(original('lifecycle-' + label), 'lifecycle-' + label)
+        manifest = submit_form('ajax', [], tokens=[token], extra_fields=fields,
+            headers={**REAL_CLOCK, **headers}, expect_mail=label == 'preview')
+        check(manifest['receipt_ids'] == [receipt_id], label + ' retains its authenticated AJAX original')
+        check(manifest['fields']['forminator_entry_status'] == expected_status,
+              label + ' follows the actual vendor entry lifecycle', manifest['fields'])
+        check(bool(manifest['fields']['scan_lifecycle_holds']), label + ' records a server-side lifecycle hold')
+        verify_held_manifest(manifest, 1, label + ' lifecycle')
+
+
+def forminator_amplification():
+    legacy_cron_before = sum(item['count'] for item in state()['scan_cron'] if item['hook'] == 'wp_clamav_scan_receipt')
+    manifest = submit_form('single', [], native_files=[('upload-1[]', RUN + '-single-' + str(i) + '.png', original('single-count-' + str(i)))
+        for i in range(2)], headers=REAL_CLOCK)
+    verify_held_manifest(manifest, 2, 'single-field count violation')
+    manifest = submit_form('twofields', [], native_files=[(field + '[]', RUN + '-' + field + '-' + str(i) + '.png', original(field + '-request-count-' + str(i)))
+        for field in ['upload-1', 'upload-2'] for i in range(2)], headers=REAL_CLOCK)
+    verify_held_manifest(manifest, 4, 'aggregate request count violation')
+    manifest = submit_form('submission', [original('flood-' + str(i)) for i in range(10)],
+        extra_fields={'totalFiles': '0', 'scanner_warnings': '[]', 'scan_receipt_ids': '[]'}, headers=REAL_CLOCK)
+    verify_held_manifest(manifest, 10, 'multipart upload flood')
+    manifest = submit_form('single', [b''], headers=REAL_CLOCK)
+    verify_held_manifest(manifest, 1, 'zero-byte original')
+    manifest = submit_form('typeblocked', [original('blocked-png')], headers=REAL_CLOCK)
+    verify_held_manifest(manifest, 1, 'server-configured disallowed extension')
+    manifest = submit_form('single', [original('unqualified')], headers={**REAL_CLOCK, 'X-WP-ClamAV-Test-Version': 'unqualified'})
+    verify_held_manifest(manifest, 1, 'unqualified Forminator version')
+    manifest = submit_form('single', [original('framing')], padding='X' * 5000, headers=REAL_CLOCK)
+    verify_held_manifest(manifest, 1, 'request framing budget violation')
+
+    uploaded = [upload_ajax(original('ajax-count-' + str(i)), 'ajax-count-' + str(i)) for i in range(4)]
+    tokens, ids = [x[0] for x in uploaded], [x[1] for x in uploaded]
+    route('queue', fields={}, headers=REAL_CLOCK)
+    for receipt_id in ids:
+        code, event = route('assess', fields={'id': receipt_id}, headers=REAL_CLOCK)
+        check(code == 200 and event.get('status') == 'held', 'unbound AJAX receipt cannot request automatic native work', event)
+    check(dispatches_for(ids) == [], 'AJAX uploads never dispatch before a narrative commits')
+    manifest = submit_form('ajax', [], tokens=tokens, headers=REAL_CLOCK,
+        extra_fields={'totalFiles': '0', 'adapter_qualified': '1', 'scan_receipt_ids': json.dumps(ids)})
+    verify_held_manifest(manifest, 4, 'verified AJAX token count violation')
+
+    valid = submit_form('ajax', [], tokens=[tokens[0]], headers=REAL_CLOCK)
+    check(valid['fields']['forminator_entry_status'] == 'active' and valid['fields']['scan_lifecycle_holds'] == [],
+          'accepted final entry has the qualified active lifecycle')
+    check(valid['fields']['scan_receipt_ids'] == [ids[0]], 'valid server-bound AJAX subset commits its exact eligible original')
+    for _ in range(5):
+        code, event = route('assess', fields={'id': ids[0], 'submission_id': valid['id']}, headers=REAL_CLOCK)
+        if event.get('status') == 'clean':
+            break
+        check(event.get('status') == 'held' and 'resource_deferred' in event.get('reason_codes', []),
+              'real-clock positive control observes resource pacing before retry', event)
+        delay = event.get('retry_at', 0) - time.time() + 0.05
+        check(0 <= delay <= 10, 'real-clock test retries only its bounded resource-policy deadline', event)
+        time.sleep(delay)
+    check(len(dispatches_for([ids[0]])) == 1 and dispatches_for([ids[0]])[0]['real_clock'], 'valid bound original dispatches once through the real-clock resource policy')
+    repeated = submit_form('ajax', [], tokens=[tokens[0]], headers=REAL_CLOCK)
+    for _ in range(2):
+        route('queue', fields={}, headers=REAL_CLOCK)
+    check(len(dispatches_for([ids[0]])) == 1, 'repeated AJAX token submission cannot reset automatic scan retry state')
+    check(sum(item['count'] for item in state()['scan_cron'] if item['hook'] == 'wp_clamav_dispatch') <= 1,
+          'all automatic work shares one coalesced WordPress dispatch event')
+    check(sum(item['count'] for item in state()['scan_cron'] if item['hook'] == 'wp_clamav_scan_receipt') == legacy_cron_before,
+          'upload flood never creates per-receipt WordPress cron entries')
+
+    for action in ['wp_clamav_retry', 'wp_clamav_full_scan', 'wp_clamav_scan_receipt']:
+        code, result = request('/wp-admin/admin-post.php', fields={'action': action, 'receipt': ids[0], 'path': '/etc/passwd'}, headers=REAL_CLOCK)
+        check(code >= 400, 'unauthenticated request cannot invoke ' + action)
+    code, result = request('/wp-admin/admin-ajax.php', fields={'action': 'forminator_multiple_file_upload',
+        'form_id': FIXTURE['forms']['ajax'], 'element_id': 'upload-1', 'nonce': nonce(FIXTURE['forms']['ajax']),
+        'upload-1': '/etc/passwd', 'tmp_name': '/etc/passwd'}, headers=REAL_CLOCK)
+    check(code == 200 and result.get('success') is False, 'client local path never substitutes for a genuine PHP upload')
+    check(len(dispatches_for([ids[0]])) == 1, 'unauthenticated retry/path probes cause no new scanner dispatch')
 
 
 def forminator_uploads():
@@ -164,7 +292,7 @@ def forminator_uploads():
         for content in contents:
             receipt = private_and_absent(content, 'Forminator ' + mode)
             check(receipt['id'] in manifest['receipt_ids'], 'Forminator ' + mode + ' receipt is bound to its canonical narrative')
-            code, event = route('assess', fields={'id': receipt['id']})
+            code, event = route('assess', fields={'id': receipt['id'], 'submission_id': manifest['id']})
             check(code == 200 and event.get('status') in ['detected', 'held'], 'Forminator scan assesses privately')
             private_and_absent(content, 'Forminator ' + mode + ' after assessment')
     submit_form('single', [], missing=True)
@@ -253,6 +381,9 @@ def administrator_downloads():
 
 
 if __name__ == '__main__':
+    forminator_lifecycle()
+    forminator_amplification()
+    route('virtual-clock', fields={}, headers=REAL_CLOCK)
     core_uploads()
     forminator_uploads()
     administrator_downloads()

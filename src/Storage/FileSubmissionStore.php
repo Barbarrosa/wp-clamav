@@ -222,6 +222,16 @@ final class FileSubmissionStore implements SubmissionStore
         return $result;
     }
 
+    public function submission(string $id): array
+    {
+        if (!preg_match('/\A[a-zA-Z0-9_-]{1,100}\z/D', $id)) { throw new StorageException('Invalid submission identifier.'); }
+        $record = Files::readJson($this->root . '/submissions/' . $id . '.json');
+        if (($record['id'] ?? null) !== $id || !is_array($record['receipt_ids'] ?? null) || !is_array($record['fields'] ?? null)) {
+            throw new StorageException('Canonical submission identity is invalid.');
+        }
+        return $record;
+    }
+
     public function commitSubmission(string $id, array $fields, array $receiptIds = []): void
     {
         if (!preg_match('/\A[a-zA-Z0-9_-]{1,100}\z/D', $id)) { throw new StorageException('Invalid submission identifier.'); }

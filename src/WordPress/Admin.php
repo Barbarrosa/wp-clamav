@@ -311,8 +311,10 @@ final class Admin
                 case 'retry':
                 case 'full_scan':
                     Plugin::intake()->get($id);
-                    Plugin::scheduleScan($id, $action === 'full_scan' ? 'full' : null);
-                    $message = 'Scan queued. The original remains private until an authorized decision.';
+                    $queued = Plugin::scheduleScan($id, $action === 'full_scan' ? 'full' : null, true, get_current_user_id());
+                    $message = $queued['status'] === 'queued'
+                        ? 'Scan queued under the shared CPU and memory allowance. The original remains private until an authorized decision.'
+                        : 'The bounded scan queue cannot accept this request. The original remains private; review capacity and retry explicitly.';
                     break;
                 case 'manual_approve':
                     Plugin::intake()->authorizeManual($id, get_current_user_id(), $reason);

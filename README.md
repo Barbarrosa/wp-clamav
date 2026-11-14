@@ -84,7 +84,7 @@ Configure budgets as finite nonnegative numbers using the units in their names:
 | Indefinite storage | `storage_bytes`, `storage_reserve_bytes`, `update_reserve_bytes`; confirm `account_remaining_bytes`, `inodes_remaining`, `inode_reserve`, `quota_observed_at` when available |
 | Intake | PHP/WordPress/Forminator constraints are detected; optionally tighten `file_bytes`, `request_bytes`, `server_body_bytes`, `files_per_request` |
 | Native work | `native_as_bytes`, `native_cpu_seconds`, `native_file_bytes`, `worker_wall_seconds`, `request_work_seconds`, `cleanup_seconds`, `cpu_hourly_seconds`, `cpu_daily_seconds`, `cpu_monthly_seconds` |
-| Native RSS | Confirm `native_process_bytes`, `native_account_available_bytes`; larger AS caps require `measured_native_rss_bytes` and variation qualification |
+| Native RAM | Confirm `native_process_bytes`, `native_account_available_bytes`; AS is capped at 80% of the smaller allocation. Historical RSS cannot raise the ceiling |
 | PHP/remote work | `php_work_bytes`, request/worker wall and cleanup; optionally `proxy_remaining_seconds` |
 | Official updates | `update_line_bytes`, `update_state_inodes`, confirmed account bytes/inodes and inode reserve, `freshclam_connect_seconds`, `freshclam_low_speed_seconds`, `freshclam_max_attempts`; optional tighter `update_wall_seconds` |
 | Code downloads | `code_staging_bytes`, `code_update_seconds`, confirmed account remainder and the request/worker deadline; plugin downloads have their separately configured byte/time budgets |
@@ -106,6 +106,16 @@ requires fresh quota confirmation before shares can be redistributed.
 
 Database freshness defaults to 48 hours as a security policy. OTP/invitation
 lifetimes are independent security policies and do not alter retention.
+
+One account-wide OS lock admits scans and maintenance before hashing, copying or
+native startup. Native descendants retain its descriptor through process exit,
+including when the PHP supervisor dies. Scans can spend at most 80% of each
+confirmed rolling CPU allocation and are paced across the month, with at least
+one CPU-second charged per admitted scan. Maintenance has priority over new scans.
+An unknown allocation or busy slot defers work while originals remain private.
+Uploads share one coalesced queue wake; unsubmitted Forminator AJAX originals and
+known policy-held files never start an automatic scan. See
+[scan dispatch](docs/scan-dispatch.md) and [resource constraints](docs/resource-constraints.md).
 
 ## Notifications and testing
 

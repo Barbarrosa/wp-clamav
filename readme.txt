@@ -2,7 +2,7 @@
 Contributors: barbarrosa
 Requires at least: 6.4
 Requires PHP: 8.2
-Stable tag: 0.1.0
+Stable tag: 0.1.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -27,6 +27,10 @@ protection. Private storage must be outside all document roots. No live-site
 configuration, data cleanup or external storage migration runs on activation.
 
 == Changelog ==
+
+= 0.1.1 =
+Bound scan admission, CPU pacing, account memory and queue work; protect maintenance
+from scan floods and defer unsubmitted or policy-held Forminator files.
 
 = 0.1.0 =
 Initial experimental implementation and signed release workflow.

@@ -66,6 +66,7 @@ jobs:
           p.write_text(json.dumps({'integration_sha':os.environ['GITHUB_SHA'],'passed':True,
               'stable_release_qualified':False,'siteground_qualified':False,
               'checks':['PHP 8.2 syntax/contracts','WordPress 7.1.4/Forminator 1.58.4 real HTTP lifecycle',
+                        'Shared scan admission, CPU pacing, RAM ceilings and bounded dispatch',
                         'Signed plugin-update hooks','Notification database/HTTP','Multisite application/quota/recovery']},indent=2)+'\n')
           PY
           version=$(python3 -c 'import pathlib,re; print(re.search(r"\* Version:\s*(\S+)",pathlib.Path("wp-clamav.php").read_text())[1])')

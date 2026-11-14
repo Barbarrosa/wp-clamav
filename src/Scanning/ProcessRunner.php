@@ -10,15 +10,20 @@ final class ProcessRunner
         if (($limits['wall_seconds'] ?? 0) <= 0 || ($limits['output_bytes'] ?? 0) < 1) { throw new \RuntimeException('Native supervision limits are not configured.'); }
         foreach ($arguments as $argument) { if (!is_string($argument) || str_contains($argument, "\0")) { throw new \InvalidArgumentException('Invalid native argument.'); } }
         $descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+        if (isset($limits['dispatch_stream'])) {
+            if (!is_resource($limits['dispatch_stream'])) { throw new \InvalidArgumentException('A live dispatch descriptor is required.'); }
+            $descriptors[3] = $limits['dispatch_stream'];
+        }
         // Never forward diagnostic hooks, injected libraries, update URLs or test overrides.
-        $environment = ['LANG' => 'C.UTF-8', 'PATH' => '/usr/bin:/bin'];
+        $environment = ['LANG' => 'C.UTF-8', 'PATH' => '/usr/bin:/bin', 'COMPACT_PARENT_PID' => (string) getmypid()];
         if ($cwd !== null) { $environment['TMPDIR'] = $cwd; }
+        $deadline = hrtime(true) / 1e9 + CpuUsage::remaining($limits);
+        $beforeUsage = CpuUsage::seconds(1);
         $process = proc_open($arguments, $descriptors, $pipes, $cwd, $environment, ['bypass_shell' => true]);
-        if (!is_resource($process)) { throw new \RuntimeException('Could not start the native component.'); }
-        $beforeUsage = function_exists('getrusage') ? getrusage(1) : false;
+        if (!is_resource($process)) { throw new ProcessFailure('Could not start the native component.', 0.0); }
         fclose($pipes[0]);
         stream_set_blocking($pipes[1], false); stream_set_blocking($pipes[2], false);
-        $output = ''; $error = ''; $deadline = hrtime(true) / 1e9 + $limits['wall_seconds']; $exit = null;
+        $output = ''; $error = ''; $exit = null; $failure = null;
         $pid = proc_get_status($process)['pid'];
         $completed = false;
         try {
@@ -41,6 +46,7 @@ final class ProcessRunner
                 }
             }
             $completed = true;
+        } catch (\Throwable $caught) { $failure = $caught;
         } finally {
             $status = proc_get_status($process);
             if (!$completed || $status['running']) {
@@ -51,12 +57,9 @@ final class ProcessRunner
             $closed = proc_close($process);
             if ($exit === null) { $exit = $closed; }
         }
-        $afterUsage = function_exists('getrusage') ? getrusage(1) : false;
-        $seconds = static function (array $usage): float {
-            return (float) ($usage['ru_utime.tv_sec'] ?? 0) + (float) ($usage['ru_stime.tv_sec'] ?? 0)
-                + ((float) ($usage['ru_utime.tv_usec'] ?? 0) + (float) ($usage['ru_stime.tv_usec'] ?? 0)) / 1000000;
-        };
-        $cpu = is_array($beforeUsage) && is_array($afterUsage) ? max(0, $seconds($afterUsage) - $seconds($beforeUsage)) : null;
+        $afterUsage = CpuUsage::seconds(1);
+        $cpu = $beforeUsage !== null && $afterUsage !== null ? max(0, $afterUsage - $beforeUsage) : null;
+        if ($failure !== null) { throw new ProcessFailure($failure->getMessage(), $cpu, $failure); }
         return ['exit_code' => $exit, 'stdout' => $output, 'stderr' => $error, 'cpu_seconds' => $cpu];
     }
 

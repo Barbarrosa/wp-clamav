@@ -6,10 +6,41 @@ if (!defined('WP_CLAMAV_INTEGRATION_TEST') || WP_CLAMAV_INTEGRATION_TEST !== tru
     return;
 }
 
-add_filter('wp_clamav_backend', static function ($backend, $settings) {
-    return new class implements \WPClamAV\Scanning\ScannerBackend {
+$fixtureClockPath = '/workspace/wp-integration-clock.json';
+$fixtureClock = is_file($fixtureClockPath) ? json_decode(file_get_contents($fixtureClockPath), true) : [];
+$fixtureRealClock = hash_equals('integration-only-route-token', (string) ($_SERVER['HTTP_X_WP_CLAMAV_TEST'] ?? ''))
+    && ($_SERVER['HTTP_X_WP_CLAMAV_TEST_CLOCK'] ?? '') === 'real';
+$fixtureNow = $fixtureRealClock ? time() : max(time(), (int) ($fixtureClock['now'] ?? 0));
+// TEST ONLY: enable the vendor's abandonment feature and its documented spam
+// classifier. The public request still goes through real Forminator processing.
+add_filter('forminator_form_abandonment_disabled', '__return_false');
+if (hash_equals('integration-only-route-token', (string) ($_SERVER['HTTP_X_WP_CLAMAV_TEST'] ?? ''))
+    && ($_SERVER['HTTP_X_WP_CLAMAV_TEST_LIFECYCLE'] ?? '') === 'spam') {
+    add_filter('forminator_spam_protection', '__return_true');
+}
+if (hash_equals('integration-only-route-token', (string) ($_SERVER['HTTP_X_WP_CLAMAV_TEST'] ?? ''))
+    && ($_SERVER['HTTP_X_WP_CLAMAV_TEST_VERSION'] ?? '') === 'unqualified' && !defined('FORMINATOR_VERSION')) {
+    define('FORMINATOR_VERSION', '1.58.5');
+}
+add_filter('wp_clamav_resource_policy', static fn($policy, $settings) => new \WPClamAV\Resources\ResourcePolicy(
+    $settings, null, static fn(): int => $fixtureNow), 10, 2);
+
+add_filter('wp_clamav_backend', static function ($backend, $settings) use ($fixtureNow, $fixtureRealClock, $fixtureClockPath) {
+    return new class($fixtureNow, $fixtureRealClock, $fixtureClockPath) implements \WPClamAV\Scanning\ScannerBackend {
+        public function __construct(private int $now, private bool $realClock, private string $clockPath) {}
         public function scan($original, array $receipt, string $profile, array $limits): array
         {
+            file_put_contents('/workspace/wp-integration-dispatch.jsonl', json_encode([
+                'id' => $receipt['id'], 'sha256' => $receipt['sha256'], 'profile' => $profile, 'name' => $receipt['name'],
+                'real_clock' => $this->realClock, 'at' => $this->now,
+            ]) . "\n", FILE_APPEND | LOCK_EX);
+            if (!$this->realClock) {
+                $saved = is_file($this->clockPath) ? json_decode(file_get_contents($this->clockPath), true) : [];
+                $pace = is_file('/workspace/wp-integration-private/cpu-budget.json')
+                    ? json_decode(file_get_contents('/workspace/wp-integration-private/cpu-budget.json'), true) : [];
+                file_put_contents($this->clockPath, json_encode(['now' => max($this->now, (int) ($saved['now'] ?? 0),
+                    (int) ceil((float) ($pace['scan_next_at'] ?? 0))) + 1]), LOCK_EX);
+            }
             rewind($original);
             $bytes = stream_get_contents($original);
             if (str_contains($bytes, 'TEST-FAILED')) {
@@ -27,6 +58,7 @@ add_filter('wp_clamav_backend', static function ($backend, $settings) {
                 'generation_id' => 'integration-fixture-database',
                 'findings' => $detected ? ['Integration.Test.Detection'] : [],
                 'reason_codes' => $held ? ['integration_incomplete'] : [],
+                'local_cpu_seconds' => 0.001,
             ];
         }
     };
@@ -44,6 +76,9 @@ add_action('rest_api_init', static function (): void {
         if ($request->get_param('kind') === 'admin_download') {
             wp_set_current_user(1);
             return ['nonce' => wp_create_nonce('wp_clamav_download_original_' . $request->get_param('receipt') . '_' . $request->get_param('event_id') . '_' . $request->get_param('sha256'))];
+        }
+        if ($request->get_param('kind') === 'abandonment') {
+            return ['nonce' => wp_create_nonce('forminator_abandonment_form' . (int) $request->get_param('form_id'))];
         }
         return ['nonce' => wp_create_nonce('forminator_submit_form' . (int) $request->get_param('form_id'))];
     }]);
@@ -64,7 +99,19 @@ add_action('rest_api_init', static function (): void {
         return wp_handle_upload($file, ['test_form' => false, 'action' => 'integration_custom_upload']);
     }]);
     register_rest_route('wp-clamav-tests/v1', '/assess', ['methods' => 'POST', 'permission_callback' => $permission, 'callback' => static function ($request) {
-        return \WPClamAV\WordPress\Plugin::intake()->assess((string) $request->get_param('id'));
+        $submission = $request->get_param('submission_id');
+        return \WPClamAV\WordPress\Plugin::intake()->assess((string) $request->get_param('id'), null, false, is_string($submission) ? $submission : null);
+    }]);
+    register_rest_route('wp-clamav-tests/v1', '/queue', ['methods' => 'POST', 'permission_callback' => $permission, 'callback' => static function ($request) {
+        return \WPClamAV\WordPress\Plugin::app()->runQueue();
+    }]);
+    register_rest_route('wp-clamav-tests/v1', '/virtual-clock', ['methods' => 'POST', 'permission_callback' => $permission, 'callback' => static function () {
+        $pace = is_file('/workspace/wp-integration-private/cpu-budget.json')
+            ? json_decode(file_get_contents('/workspace/wp-integration-private/cpu-budget.json'), true) : [];
+        $saved = is_file('/workspace/wp-integration-clock.json') ? json_decode(file_get_contents('/workspace/wp-integration-clock.json'), true) : [];
+        $now = max(time(), (int) ($saved['now'] ?? 0), (int) ceil((float) ($pace['scan_next_at'] ?? 0))) + 1;
+        file_put_contents('/workspace/wp-integration-clock.json', json_encode(['now' => $now]), LOCK_EX);
+        return ['virtual_next_request' => $now];
     }]);
     register_rest_route('wp-clamav-tests/v1', '/tamper', ['methods' => 'POST', 'permission_callback' => $permission, 'callback' => static function ($request) {
         $store = \WPClamAV\WordPress\Plugin::storage();
@@ -105,6 +152,16 @@ add_action('rest_api_init', static function (): void {
         }
         $audit = [];
         foreach (glob($root . '/audit/*.json') ?: [] as $path) { $audit[] = json_decode(file_get_contents($path), true); }
-        return ['receipts' => $receipts, 'submissions' => $submissions, 'public_files' => $publicFiles, 'mail' => $mail, 'audit' => $audit];
+        $dispatches = [];
+        foreach (is_file('/workspace/wp-integration-dispatch.jsonl') ? file('/workspace/wp-integration-dispatch.jsonl', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) : [] as $line) {
+            $dispatches[] = json_decode($line, true);
+        }
+        $cron = [];
+        foreach (_get_cron_array() ?: [] as $at => $hooks) {
+            foreach ($hooks as $hook => $events) {
+                if (in_array($hook, ['wp_clamav_dispatch', 'wp_clamav_scan_receipt'], true)) { $cron[] = ['at' => $at, 'hook' => $hook, 'count' => count($events)]; }
+            }
+        }
+        return ['receipts' => $receipts, 'submissions' => $submissions, 'public_files' => $publicFiles, 'mail' => $mail, 'audit' => $audit, 'dispatches' => $dispatches, 'scan_cron' => $cron];
     }]);
 });

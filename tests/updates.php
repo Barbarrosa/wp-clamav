@@ -85,7 +85,8 @@ try {
     file_put_contents($updater, "#!" . PHP_BINARY . "\n<?php file_put_contents(getcwd().'/argv.json',json_encode(\$argv));chmod(getcwd().'/argv.json',0600);echo json_encode(['protocol'=>1,'status'=>'updated']),\"\\n\";\n"); chmod($updater, 0700);
     $settings = ['local_binary' => $scanner, 'updater_binary' => $updater, 'state_dir' => $temp . '/state', 'certificates_dir' => $temp . '/certs',
         'expected_current_sha256' => 'absent',
-        'budgets' => ['native_as_bytes' => 200000000, 'native_cpu_seconds' => 10, 'worker_wall_seconds' => 10, 'cleanup_seconds' => 1,
+        'budgets' => ['native_as_bytes' => 200000000, 'native_process_bytes' => 300000000, 'native_account_available_bytes' => 300000000,
+            'native_cpu_seconds' => 10, 'worker_wall_seconds' => 10, 'cleanup_seconds' => 1,
             'native_file_bytes' => 10000000, 'update_line_bytes' => 10000, 'update_reserve_bytes' => 100000,
             'freshclam_connect_seconds' => 10, 'freshclam_low_speed_seconds' => 10, 'freshclam_max_attempts' => 3, 'php_work_bytes' => 10000000,
             'storage_bytes' => 1000000, 'storage_reserve_bytes' => 1000, 'account_remaining_bytes' => 1000000,

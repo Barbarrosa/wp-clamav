@@ -66,7 +66,11 @@ final class Application
             $path = rtrim($path, '/') . '/site-' . get_current_blog_id();
         }
         $this->settings = $settings;
-        $this->policy = new ResourcePolicy($settings);
+        $policy = new ResourcePolicy($settings);
+        // Trusted server integrations may supply a policy, including fixture clocks.
+        if (function_exists('apply_filters')) { $policy = apply_filters('wp_clamav_resource_policy', $policy, $settings); }
+        if (!$policy instanceof ResourcePolicy) { throw new \RuntimeException('The resource-policy integration returned an invalid policy.'); }
+        $this->policy = $policy;
         $policy = $this->policy;
         $this->store = new FileSubmissionStore($path, $roots,
             static fn(?int $length, array $usage, array $context) => $policy->admitStorage($path, $length, $usage, $context), $index);
@@ -179,35 +183,143 @@ final class Application
         return $diagnostics;
     }
 
+    public function queueScan(string $id, ?string $profile = null, bool $explicit = false, ?int $actor = null, ?string $submissionId = null): array
+    {
+        $profile ??= (string) ($this->settings['profile'] ?? 'full');
+        if (!in_array($profile, ['full', 'pdf-jpeg-png-pe-exclusions'], true) || $explicit && ($actor === null || $actor < 1)) {
+            throw new \InvalidArgumentException('A supported profile and authorized actor are required.');
+        }
+        $receipt = $this->store->get($id);
+        $latest = $this->store->latestEvent($id);
+        $reasons = $latest['reason_codes'] ?? [];
+        // Replayed browser tokens, submissions and old cron events cannot turn
+        // a terminal receipt into another expensive scan or reset its retry state.
+        if (!$explicit && $this->automaticQueueTerminal($latest)) {
+            return ['status' => 'terminal', 'next_at' => null];
+        }
+        $ineligible = $this->intake->automaticEligibility($receipt, $explicit, $submissionId);
+        if ($ineligible !== []) {
+            $this->recordQueueHold($id, $profile, array_values(array_unique(array_merge(['input_policy_held'], $ineligible))));
+            return ['status' => 'ineligible', 'reasons' => $ineligible, 'next_at' => null];
+        }
+        $queued = (new \WPClamAV\Scanning\DurableScanQueue($this->store))->enqueue($id, $profile, $explicit, $actor, $submissionId,
+            (int) $this->policy->now(), !$explicit && in_array('resource_deferred', $reasons, true) ? (int) ($latest['retry_at'] ?? 0) : null);
+        if ($queued['status'] === 'capacity') { $this->recordQueueHold($id, $profile, ['queue_capacity']); }
+        return $queued;
+    }
+
+    private function recordQueueHold(string $id, string $profile, array $reasons): void
+    {
+        $latest = $this->store->latestEvent($id);
+        if ($latest !== null && ($latest['reason_codes'] ?? []) === $reasons && ($latest['requested_profile'] ?? null) === $profile) { return; }
+        $this->store->appendEvent($id, ['protocol' => 1, 'status' => 'held', 'completed' => false,
+            'applicability_proven' => false, 'coverage_qualified' => false, 'requested_profile' => $profile,
+            'effective_profile' => $profile, 'engine_version' => 'unavailable', 'generation_id' => 'unavailable',
+            'findings' => [], 'reason_codes' => $reasons]);
+    }
+
+    private function automaticQueueTerminal(?array $latest): bool
+    {
+        return $latest !== null && !array_intersect($latest['reason_codes'] ?? [], ['scan_in_progress', 'resource_deferred', 'awaiting_submission']);
+    }
+
+    /** Repair missed legacy intents with an indexed keyset, never an unbounded directory offset walk. */
+    private function recoverScanRequests(int $limit): int
+    {
+        global $wpdb;
+        if (!isset($wpdb) || !is_object($wpdb) || !method_exists($wpdb, 'get_results')) { return 0; }
+        $root = $this->store->directory();
+        if (file_exists($root . '/.index-dirty.json') || file_exists($root . '/.usage-dirty.json')) { return 0; }
+        if (file_exists($root . '/usage.json') && (Files::readJson($root . '/usage.json')['index_repair_required'] ?? false)) { return 0; }
+        $path = $root . '/worker-cursor.json';
+        $cursor = file_exists($path) ? Files::readJson($path) : [];
+        $at = max(0, (int) ($cursor['created_at'] ?? 0)); $after = (string) ($cursor['id'] ?? '');
+        if ($after !== '') { Files::id($after); }
+        $rows = $wpdb->get_results($wpdb->prepare('SELECT id,created_at FROM ' . $wpdb->prefix . 'clamav_receipts WHERE deleted_at IS NULL AND (created_at>%d OR (created_at=%d AND id>%s)) ORDER BY created_at ASC,id ASC LIMIT %d', $at, $at, $after, $limit), ARRAY_A);
+        if (!is_array($rows)) { return 0; }
+        $recovered = 0;
+        foreach ($rows as $row) {
+            $cursor = ['created_at' => (int) $row['created_at'], 'id' => Files::id((string) $row['id'])];
+            try {
+                if ($this->store instanceof FileSubmissionStore && !file_exists($root . '/receipts/' . $cursor['id'] . '.json')) { continue; }
+                $receipt = $this->store->get($cursor['id']);
+                $latest = $this->store->latestEvent($cursor['id']);
+                if ($receipt['complete'] && !isset($receipt['deleted_at']) && ($latest === null || array_intersect(['scan_in_progress', 'resource_deferred'], $latest['reason_codes'] ?? []))) {
+                    // New Forminator receipts need the trusted submission descriptor
+                    // supplied by commitSubmission; recovery cannot invent one.
+                    $queued = $this->queueScan($receipt['id']);
+                    if ($queued['status'] === 'queued') { ++$recovered; }
+                }
+            } catch (\Throwable) { /* Canonical records remain visible for explicit review. */ }
+        }
+        Files::json($path, count($rows) < $limit ? ['created_at' => 0, 'id' => ''] : $cursor);
+        return $recovered;
+    }
+
     public function runQueue(): array
     {
-        $processed = 0; $held = 0;
-        // Reconcile canonical pending originals even if the scheduling request was interrupted.
-        // Index pagination is bounded; an explicit cursor prevents starvation behind old receipts.
-        $cursorPath = $this->store->directory() . '/worker-cursor.json';
-        $cursor = file_exists($cursorPath) ? Files::readJson($cursorPath) : ['offset' => 0];
-        $limit = max(1, min(20, (int) ($this->settings['budgets']['worker_batch_files'] ?? 1)));
-        $receipts = $this->store->list($limit, (int) $cursor['offset']);
-        foreach ($receipts as $receipt) {
-            try {
-                $latest = $receipt['latest_event_id'] === null ? null : $this->store->latestEvent($receipt['id']);
-                $interrupted = $latest !== null && ($latest['reason_codes'] ?? []) === ['scan_in_progress'];
-                if (!isset($receipt['deleted_at']) && $receipt['complete'] && ($latest === null || $interrupted)) {
-                    // assess() takes a nonblocking per-receipt lock. A live scan
-                    // keeps that lock; an interrupted process releases it.
-                    $this->intake->assess($receipt['id']); ++$processed;
+        try {
+            return $this->store->withLock('scan-dispatch', function (): array {
+                $budgets = $this->settings['budgets'] ?? [];
+                $limit = max(1, min(20, (int) ($budgets['worker_batch_files'] ?? 1)));
+                $attempts = max(1, min(20, (int) ($budgets['worker_max_attempts'] ?? 3)));
+                $seconds = min((float) ($budgets['worker_batch_wall_seconds'] ?? $budgets['worker_wall_seconds'] ?? 0),
+                    (float) ($budgets['worker_wall_seconds'] ?? 0)) - (float) ($budgets['cleanup_seconds'] ?? 0);
+                $now = (int) $this->policy->now();
+                if ($seconds <= 0) { return ['scanned' => 0, 'held' => 1, 'next_at' => $now + 1800, 'reason' => 'worker_deadline_unconfigured']; }
+                $deadline = hrtime(true) / 1e9 + $seconds;
+                $queue = new \WPClamAV\Scanning\DurableScanQueue($this->store);
+                $recovered = $this->recoverScanRequests($limit);
+                $processed = 0; $held = 0; $skipped = 0; $nextAt = null;
+                for ($jobs = 0; $jobs < $limit && hrtime(true) / 1e9 < $deadline; ++$jobs) {
+                    $now = (int) $this->policy->now();
+                    $claim = $queue->claim($now, $limit * 2, $attempts); $nextAt = $claim['next_at'];
+                    if ($claim['request'] === null) { break; }
+                    $request = $claim['request'];
+                    if (!$request['explicit'] && $this->automaticQueueTerminal($this->store->latestEvent($request['id']))) {
+                        $queue->finish($request); ++$skipped; continue;
+                    }
+                    if ($claim['exhausted']) {
+                        $this->recordQueueHold($request['id'], $request['profile'], ['automatic_attempts_exhausted']);
+                        $queue->finish($request); ++$held; continue;
+                    }
+                    try {
+                        $event = $this->policy->withDeadline($deadline, fn(): array => $this->intake->assess($request['id'], $request['profile'], $request['explicit'], $request['submission_id'], true));
+                        if (($event['_dispatch_skipped'] ?? false) === true) {
+                            $queue->finish($request); ++$skipped; continue;
+                        }
+                        if (in_array('resource_deferred', $event['reason_codes'] ?? [], true)) {
+                            $nextAt = max($now + 1, (int) ($event['retry_at'] ?? $now + 60));
+                            $queue->finish($request, $nextAt, true); ++$held; break;
+                        }
+                        $queue->finish($request);
+                        if (in_array('input_policy_held', $event['reason_codes'] ?? [], true)) { ++$held; }
+                        else { ++$processed; }
+                    } catch (\WPClamAV\Resources\ResourceDeferred $error) {
+                        $nextAt = max($now + 1, (int) $error->retryAt);
+                        $queue->finish($request, $nextAt, true); ++$held; break;
+                    } catch (\Throwable) {
+                        $nextAt = $now + min(1800, 60 * (2 ** min(5, $request['attempts'] - 1)));
+                        $queue->finish($request, $nextAt); ++$held; break;
+                    }
                 }
-            } catch (\Throwable) { ++$held; }
+                // Refresh the bounded index without claiming another native job.
+                $remaining = $queue->status((int) $this->policy->now());
+                if ($remaining['pending'] === 0) { $nextAt = null; }
+                else { $nextAt = max((int) $this->policy->now() + 1, $nextAt ?? $remaining['next_at']); }
+                $replayed = hrtime(true) / 1e9 < $deadline ? $this->reconcileNotifications($limit) : 0;
+                $mail = hrtime(true) / 1e9 < $deadline ? ($this->notifications?->runQueue() ?? []) : [];
+                return ['scanned' => $processed, 'held' => $held, 'skipped' => $skipped, 'recovered' => $recovered, 'next_at' => $nextAt,
+                    'notifications_reconciled' => $replayed, 'mail' => $mail];
+            }, true);
+        } catch (\Throwable $error) {
+            return ['scanned' => 0, 'held' => 1, 'next_at' => (int) $this->policy->now() + 60, 'reason' => 'dispatcher_busy_or_unavailable', 'error' => substr($error->getMessage(), 0, 200)];
         }
-        Files::json($cursorPath, ['offset' => count($receipts) < $limit ? 0 : (int) $cursor['offset'] + count($receipts)]);
-        $replayed = $this->reconcileNotifications($limit);
-        $mail = $this->notifications?->runQueue() ?? [];
-        return ['scanned' => $processed, 'held' => $held, 'notifications_reconciled' => $replayed, 'mail' => $mail];
     }
 
     private function notifyEvent(array $event): void
     {
-        if ($this->notificationController === null || ($event['reason_codes'] ?? []) === ['scan_in_progress']) { return; }
+        if ($this->notificationController === null || array_intersect($event['reason_codes'] ?? [], ['scan_in_progress', 'resource_deferred', 'awaiting_submission', 'queue_capacity'])) { return; }
         $id = Files::id((string) $event['id']);
         $this->store->withLock('notify-' . $id, function () use ($id, $event): void {
             $directory = $this->store->directory() . '/notification-acks';

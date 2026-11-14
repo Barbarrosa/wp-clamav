@@ -31,7 +31,10 @@ class FixtureReportTests(unittest.TestCase):
         summary = '142 real HTTP checks passed (WordPress7.1.4/Forminator1.58.4; fixture backend only).'
         output = '\n'.join(['PASS actual fixture check'] * 142 + [summary])
         self.assertEqual(CI.require_http_suite(output), 142)
-        for incomplete in [summary, output.replace('PASS ', 'SKIP ', 1), output + '\nUnexpected error']:
+        expanded = '\n'.join(['PASS expanded fixture check'] * 143 + [summary.replace('142', '143')])
+        self.assertEqual(CI.require_http_suite(expanded), 143)
+        undersized = '\n'.join(['PASS fixture check'] * 141 + [summary.replace('142', '141')])
+        for incomplete in [summary, output.replace('PASS ', 'SKIP ', 1), output + '\nUnexpected error', output.replace(summary, summary.replace('142', '143')), undersized]:
             with self.subTest(output=incomplete[-200:]), self.assertRaises(RuntimeError):
                 CI.require_http_suite(incomplete)
 

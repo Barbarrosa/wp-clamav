@@ -51,12 +51,11 @@ def require_php_suite(output, expected):
 
 def require_http_suite(output, expected_checks=142):
     lines = output.rstrip().splitlines()
-    summary = (str(expected_checks) + ' real HTTP checks passed '
-               '(WordPress7.1.4/Forminator1.58.4; fixture backend only).')
-    if (not lines or lines[-1] != summary
-            or sum(line.startswith('PASS ') for line in lines) != expected_checks):
+    summary = re.fullmatch(r'([0-9]+) real HTTP checks passed \(WordPress7\.1\.4/Forminator1\.58\.4; fixture backend only\)\.', lines[-1]) if lines else None
+    count = int(summary[1]) if summary else 0
+    if (count < expected_checks or sum(line.startswith('PASS ') for line in lines) != count):
         raise RuntimeError('Real WordPress HTTP fixture did not complete every expected check.')
-    return expected_checks
+    return count
 
 
 def relative(name):
@@ -178,7 +177,7 @@ foreach (['forminator/forminator.php','wp-clamav/wp-clamav.php'] as $plugin) {
             require_http_suite((a.output / 'wordpress-http.log').read_text())
             test_env = os.environ.copy()
             test_env.update(WP_CLAMAV_WORDPRESS_DIR=str(site), WP_CLAMAV_HTTP_BASE='http://127.0.0.1:8081')
-            for name in ('plugin-updates-wordpress.php', 'notifications-database.php', 'notifications-wordpress-http.php'):
+            for name in ('plugin-updates-wordpress.php', 'notifications-database.php', 'notifications-wordpress-http.php', 'dispatch-wordpress.php'):
                 with (a.output / (name + '.log')).open('w') as results:
                     subprocess.run(['php', str(source / 'tests' / name)], env=test_env,
                                    check=True, timeout=180, stdout=results, stderr=subprocess.STDOUT)

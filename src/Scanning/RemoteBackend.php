@@ -16,13 +16,14 @@ final class RemoteBackend implements ScannerBackend
     public function scan($original, array $receipt, string $profile, array $limits): array
     {
         if (!function_exists('curl_init')) { throw new \RuntimeException('The streaming remote backend requires PHP cURL.'); }
+        $remaining = CpuUsage::remaining($limits);
         rewind($original);
         $handle = curl_init(rtrim($this->endpoint, '/') . '/v1/scan?profile=' . rawurlencode($profile));
         $response = ''; $overflow = false;
         $options = [CURLOPT_UPLOAD => true, CURLOPT_CUSTOMREQUEST => 'POST', CURLOPT_INFILE => $original, CURLOPT_INFILESIZE => $receipt['size'],
             CURLOPT_HTTPHEADER => ['Authorization: Bearer ' . $this->token, 'Content-Type: application/octet-stream', 'X-Content-SHA256: ' . $receipt['sha256'], 'Expect:'],
             CURLOPT_FOLLOWLOCATION => false, CURLOPT_MAXREDIRS => 0, CURLOPT_PROTOCOLS => CURLPROTO_HTTPS, CURLOPT_SSL_VERIFYPEER => true, CURLOPT_SSL_VERIFYHOST => 2,
-            CURLOPT_CONNECTTIMEOUT_MS => (int) min(10000, $limits['wall_seconds'] * 1000), CURLOPT_TIMEOUT_MS => (int) ($limits['wall_seconds'] * 1000),
+            CURLOPT_CONNECTTIMEOUT_MS => (int) max(1, min(10000, $remaining * 1000)), CURLOPT_TIMEOUT_MS => (int) max(1, floor($remaining * 1000)),
             CURLOPT_WRITEFUNCTION => static function ($ch, string $chunk) use (&$response, &$overflow, $limits): int {
                 if (strlen($response) + strlen($chunk) > $limits['output_bytes']) { $overflow = true; return 0; }
                 $response .= $chunk; return strlen($chunk);
@@ -32,6 +33,7 @@ final class RemoteBackend implements ScannerBackend
         try {
             if (curl_exec($handle) === false || $overflow) { throw new \RuntimeException('Remote scan failed, timed out or exceeded its protocol limit.'); }
             $status = curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
+            if ($status === 429 || $status === 503) { throw new ProcessFailure('The remote scanner is at capacity.', null, null, 'remote_capacity', (int) ($limits['now_epoch'] ?? time()) + 60); }
             if ($status !== 200) { throw new \RuntimeException('Remote scanner did not return a completed result.'); }
             $result = json_decode($response, true, 64, JSON_THROW_ON_ERROR);
             if (!is_array($result)) { throw new \RuntimeException('Invalid remote scan response.'); }

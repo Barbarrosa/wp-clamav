@@ -17,6 +17,7 @@ final class Plugin
     {
         add_filter('cron_schedules', [self::class, 'cronSchedules']);
         add_action('wp_clamav_scan_receipt', [self::class, 'scanReceipt'], 10, 2);
+        add_action('wp_clamav_dispatch', [self::class, 'runDispatch']);
         add_action('wp_clamav_worker', [self::class, 'runWorker']);
         add_action('wp_clamav_run_updates', [self::class, 'runUpdates']);
         add_action('wp_clamav_scan_event', [self::class, 'scanEvent']);
@@ -84,11 +85,38 @@ final class Plugin
         return $schedules;
     }
 
-    public static function scheduleScan(string $id, ?string $profile = null): void
+    public static function scheduleScan(string $id, ?string $profile = null, bool $explicit = false, ?int $actor = null, ?string $submissionId = null): array
     {
-        $args = [$id, $profile];
-        if (!wp_next_scheduled('wp_clamav_scan_receipt', $args)) {
-            wp_schedule_single_event(time() + 1, 'wp_clamav_scan_receipt', $args);
+        $queued = self::app()->queueScan($id, $profile, $explicit, $actor, $submissionId);
+        if ($queued['status'] === 'queued') { self::wakeDispatch((int) $queued['next_at']); }
+        return $queued;
+    }
+
+    private static function wakeDispatch(int $at): void
+    {
+        try {
+            self::storage()->withLock('scan-wakeup', static function () use ($at): void {
+                $at = max(time() + 1, $at);
+                $existing = wp_next_scheduled('wp_clamav_dispatch');
+                if ($existing !== false && $existing <= $at) { return; }
+                if ($existing !== false) { wp_unschedule_event($existing, 'wp_clamav_dispatch'); }
+                wp_schedule_single_event($at, 'wp_clamav_dispatch');
+            }, true);
+        } catch (\Throwable) {
+            // The durable index remains authoritative; the recurring worker
+            // recovers a missed wake-up without discarding originals or intents.
+            error_log('WP ClamAV dispatch wake-up deferred; durable requests remain pending.');
+        }
+    }
+
+    public static function runDispatch(): void
+    {
+        if (!Settings::enabled()) { return; }
+        try {
+            $result = self::app()->runQueue();
+            if (isset($result['next_at'])) { self::wakeDispatch((int) $result['next_at']); }
+        } catch (\Throwable) {
+            error_log('WP ClamAV bounded dispatch did not complete; retained data was not removed.');
         }
     }
 
@@ -98,7 +126,9 @@ final class Plugin
             return;
         }
         try {
-            self::intake()->assess($id, $profile);
+            // Drain legacy per-original cron events into the bounded queue.
+            // A historical event carries no authenticated administrator actor.
+            self::scheduleScan($id, $profile);
         } catch (\Throwable $error) {
             error_log('WP ClamAV scan could not complete for receipt ' . preg_replace('/[^a-zA-Z0-9_-]/', '', $id));
         }
@@ -110,7 +140,8 @@ final class Plugin
             return;
         }
         try {
-            self::app()->runQueue();
+            $result = self::app()->runQueue();
+            if (isset($result['next_at'])) { self::wakeDispatch((int) $result['next_at']); }
         } catch (\Throwable $error) {
             error_log('WP ClamAV worker did not complete; retained data was not removed.');
         }
@@ -161,6 +192,7 @@ final class Plugin
     public static function deactivate(): void
     {
         wp_clear_scheduled_hook('wp_clamav_worker');
+        wp_clear_scheduled_hook('wp_clamav_dispatch');
         // Evidence and pending scan IDs remain stored. Deactivation never deletes data.
     }
 }

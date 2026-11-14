@@ -37,13 +37,15 @@ try {
     rejects(fn() => ResourcePolicy::bytes('999999999999999999999T'), 'overflow fails');
     rejects(fn() => ResourcePolicy::bytes('-2M'), 'negative non-sentinel fails');
     $settings = ['budgets' => ['storage_bytes' => 10000000, 'storage_reserve_bytes' => 1000, 'update_reserve_bytes' => 1000,
-        'native_as_bytes' => 256000000, 'native_process_bytes' => 512000000, 'native_cpu_seconds' => 10,
+        'native_as_bytes' => 256000000, 'native_process_bytes' => 512000000, 'native_account_available_bytes' => 512000000, 'native_cpu_seconds' => 10,
+        'cpu_hourly_seconds' => 10000, 'cpu_daily_seconds' => 100000, 'cpu_monthly_seconds' => 4000000,
         'worker_wall_seconds' => 10, 'request_work_seconds' => 10, 'cleanup_seconds' => 1, 'native_file_bytes' => 1000000,
         'mail_recipient_hourly' => 3, 'mail_provider_hourly' => 5, 'mail_reserve_hourly' => 1, 'other_mail_hourly' => 0,
         'mail_message_bytes' => 10000, 'mail_php_bytes' => 100000, 'mail_message_overhead_bytes' => 1000, 'mail_memory_multiplier' => 3]];
     $observed = ['upload_max_filesize' => ['value' => '8M'], 'post_max_size' => ['value' => '10M'], 'wp_upload_bytes' => ['value' => 4000000],
         'max_file_uploads' => ['value' => 10], 'memory_limit' => ['value' => '128M'], 'php_usage' => ['value' => 1000000], 'max_execution_time' => ['value' => 120]];
-    $policy = new ResourcePolicy($settings, $observed);
+    $workClock = (object) ['now' => time()];
+    $policy = new ResourcePolicy($settings, $observed, static fn(): int => $workClock->now);
     check($policy->fileLimit() === 4000000, 'WordPress filtered limit wins');
     check($policy->fileLimit(['field_limit' => 2000000]) === 2000000, 'form field ceiling wins');
     check($policy->requestLimit(100, 200) === 10 * 1024 * 1024 - 300, 'POST counts complete body overhead');
@@ -53,9 +55,9 @@ try {
     $rssSettings = $settings;
     $rssSettings['budgets'] = array_replace($rssSettings['budgets'], ['native_as_bytes' => 900000000,
         'native_process_bytes' => 768000000, 'measured_native_rss_bytes' => 600000000]);
-    check((new ResourcePolicy($rssSettings, $observed))->nativeLimits(false)['as_bytes'] === 900000000, 'measured RSS receives headroom once while virtual space stays distinct');
+    check((new ResourcePolicy($rssSettings, $observed))->nativeLimits(false)['as_bytes'] === 409600000, 'virtual allocation cannot exceed confirmed account memory even with an earlier small RSS observation');
     $rssSettings['budgets']['measured_native_rss_bytes'] = 650000000;
-    rejects(fn() => (new ResourcePolicy($rssSettings, $observed))->nativeLimits(false), 'measured RSS plus headroom must fit actual resident allowance');
+    check((new ResourcePolicy($rssSettings, $observed))->nativeLimits(false)['as_bytes'] === 409600000, 'historical RSS observations do not enlarge the enforceable memory bound');
     check($policy->remoteLimits(false)['wall_seconds'] === 9.0, 'remote does not need native allocations');
     $unknown = new ResourcePolicy([], $observed);
     rejects(fn() => $unknown->nativeLimits(false), 'unknown native resources hold');
@@ -112,26 +114,27 @@ try {
     };
     $events = [];
     $intake = new IntakeService($store, $backend, $policy, 'full', function ($event) use (&$events) { $events[] = $event; });
-    $clean = $intake->assess($receipt['id']);
+    $assess = static function (string $id) use ($intake, $workClock): array { $workClock->now += 100; return $intake->assess($id); };
+    $clean = $assess($receipt['id']);
     check($clean['status'] === 'clean' && $intake->canPublish($receipt['id']), 'qualified matching result permits publication');
-    $backend->mode = 'crash'; $failed = $intake->assess($receipt['id']);
+    $backend->mode = 'crash'; $failed = $assess($receipt['id']);
     check($failed['status'] === 'failed' && !$failed['completed'] && !$intake->canPublish($receipt['id']), 'failed retry revokes earlier clean');
     check($store->event($clean['id'])['status'] === 'clean', 'retry does not rewrite immutable earlier event');
     check(count($events) === 2, 'only terminal results notified');
     $backend->mode = 'lie';
-    check($intake->assess($receipt['id'])['status'] === 'failed', 'contradictory clean result denied');
+    check($assess($receipt['id'])['status'] === 'failed', 'contradictory clean result denied');
     $backend->mode = 'clean';
     $held = $store->ingestStream(streamFor('held content'), ['name' => 'hold.txt', 'size' => 12, 'adapter_qualified' => false]);
-    check($intake->assess($held['id'])['status'] === 'held' && !$intake->canPublish($held['id']), 'adapter hold survives clean scanner');
+    check($assess($held['id'])['status'] === 'held' && !$intake->canPublish($held['id']), 'unqualified adapter holds without starting a scanner');
     rejects(fn() => $intake->authorizeManual($held['id'], 1, ''), 'approval needs reason');
     $intake->authorizeManual($held['id'], 1, 'Explicit review approval');
     check($intake->canPublish($held['id']), 'manual approval is separately auditable');
-    $intake->assess($held['id']);
+    $assess($held['id']);
     check(!$intake->canPublish($held['id']), 'new assessment invalidates previous manual approval');
     $path = $store->directory() . '/objects/' . $receipt['id'];
     chmod($path, 0600); file_put_contents($path, 'different bytes'); chmod($path, 0400);
     check(!$intake->canPublish($receipt['id']), 'original tampering cannot reuse scan result');
-    check($intake->assess($receipt['id'])['status'] === 'failed', 'integrity failure becomes failed event');
+    check($assess($receipt['id'])['status'] === 'failed', 'integrity failure becomes failed event');
     rejects(fn() => $store->delete($held['id'], 0, 'missing actor'), 'deletion needs authorized actor');
     $store->delete($held['id'], 1, 'Administrator explicit removal');
     rejects(fn() => $store->open($held['id']), 'deleted original cannot be downloaded');

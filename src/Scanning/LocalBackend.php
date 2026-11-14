@@ -31,9 +31,11 @@ final class LocalBackend implements ScannerBackend
         $old = umask(0077);
         try { $copy = fopen($path, 'xb'); } finally { umask($old); }
         if ($copy === false) { throw new \RuntimeException('Cannot create a private scan snapshot.'); }
+        $cpu = 0.0;
         try {
             rewind($original); $hash = hash_init('sha256'); $bytes = 0;
             while (!feof($original)) {
+                CpuUsage::remaining($limits);
                 $chunk = fread($original, 65536);
                 if ($chunk === false) { throw new \RuntimeException('Cannot read preserved scan input.'); }
                 if ($chunk === '') { if (!feof($original)) { throw new \RuntimeException('Preserved scan input stopped unexpectedly.'); } break; }
@@ -45,14 +47,25 @@ final class LocalBackend implements ScannerBackend
             if ($bytes !== $receipt['size'] || !hash_equals($receipt['sha256'], hash_final($hash))) { throw new \RuntimeException('Original changed before scanning.'); }
             fclose($copy); $copy = null; chmod($path, 0400);
             $command = array_merge([$this->binary, 'scan', '--state', $this->state, '--generation', $generation, '--profile', $profile, '--input', $path,
-                '--certs', $this->certificates, '--max-age-seconds', (string) $this->maxAgeSeconds], ProcessRunner::limitArguments($limits));
+                '--certs', $this->certificates, '--max-age-seconds', (string) $this->maxAgeSeconds], ProcessRunner::limitArguments(
+                    array_replace($limits, ['wall_seconds' => CpuUsage::remaining($limits)])));
+            $cpu = null;
             $response = $this->runner->run($command, $limits, $this->scratch);
-            if (!in_array($response['exit_code'], [0, 1, 3], true)) { throw new \RuntimeException('Native scan failed; no result is approved.'); }
+            $cpu = $response['cpu_seconds'];
+            if (!in_array($response['exit_code'], [0, 1, 3], true)) {
+                $failure = json_decode(trim($response['stdout']), true);
+                if (is_array($failure) && in_array('scanner-or-update-busy', $failure['reason_codes'] ?? [], true)) {
+                    throw new ProcessFailure('The shared native state is busy.', $cpu, null, 'native_state_busy', (int) ($limits['now_epoch'] ?? time()) + 60);
+                }
+                throw new \RuntimeException('Native scan failed; no result is approved.');
+            }
             $result = json_decode(trim($response['stdout']), true, 64, JSON_THROW_ON_ERROR);
             if (!is_array($result)) { throw new \RuntimeException('Invalid native result.'); }
             if (($result['generation_id'] ?? null) !== substr($current['generation'], 4)) { throw new \RuntimeException('Scanner result came from an unexpected generation.'); }
             $result['local_cpu_seconds'] = $response['cpu_seconds'];
             return ScanResult::validate($result, $receipt, $profile);
+        } catch (ProcessFailure $failure) { throw $failure;
+        } catch (\Throwable $failure) { throw new ProcessFailure($failure->getMessage(), $cpu, $failure);
         } finally {
             if (is_resource($copy)) { fclose($copy); }
             if (is_file($path)) { unlink($path); }

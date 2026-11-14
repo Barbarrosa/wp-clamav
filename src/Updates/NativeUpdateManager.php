@@ -3,6 +3,7 @@ declare(strict_types=1);
 namespace WPClamAV\Updates;
 
 use WPClamAV\Resources\ResourcePolicy;
+use WPClamAV\Resources\ResourceDeferred;
 use WPClamAV\Scanning\ProcessRunner;
 use WPClamAV\Storage\Files;
 
@@ -13,6 +14,21 @@ final class NativeUpdateManager
     { $this->runner ??= new ProcessRunner(); }
 
     public function run(?array $candidate = null): array
+    {
+        $dispatch = null; $intent = null;
+        try {
+            return $this->runAdmitted($candidate, $dispatch, $intent);
+        } catch (ResourceDeferred $error) {
+            return ['protocol' => 1, 'status' => 'deferred', 'reason' => $error->reason, 'next_attempt_after' => $error->retryAt];
+        } finally {
+            if ($dispatch !== null) {
+                try { $this->policy->finishMaintenanceIntent($intent); }
+                finally { $dispatch->release(); }
+            }
+        }
+    }
+
+    private function runAdmitted(?array $candidate, ?\WPClamAV\Resources\DispatchLease &$dispatch, ?string &$intent): array
     {
         $scanner = (string) ($this->settings['local_binary'] ?? '');
         $updater = (string) ($this->settings['updater_binary'] ?? ($scanner !== '' ? dirname($scanner) . '/compact-update' : ''));
@@ -42,7 +58,10 @@ final class NativeUpdateManager
         // persisted CDN cooldowns can only lengthen, never shorten, the interval.
         $interval = max(7200, (int) ($budgets['provider_cron_interval_seconds'] ?? 1800), (int) ($budgets['update_interval_seconds'] ?? 0));
         if ($candidate === null && $now < (int) ($previous['next_at'] ?? 0)) { return ['status' => 'deferred', 'next_at' => $previous['next_at']]; }
+        $intent = $this->policy->signalMaintenance();
+        $dispatch = $this->policy->acquireDispatch('maintenance');
         $limits = $this->policy->nativeLimits(PHP_SAPI !== 'cli');
+        $limits['dispatch_stream'] = $dispatch->descriptor();
         $storage = $this->policy->updateStorageLimits($state);
         $limits['file_bytes'] = min($limits['file_bytes'], intdiv($storage['max_state_bytes'], 5));
         if ($limits['file_bytes'] < 1) { throw new \RuntimeException('No bounded native update-file allocation remains.'); }
@@ -63,6 +82,7 @@ final class NativeUpdateManager
         // Preflight is charged before a second reservation. Recalculate the
         // request deadline and rolling allowances rather than reusing them.
         $limits = $this->policy->nativeLimits(PHP_SAPI !== 'cli');
+        $limits['dispatch_stream'] = $dispatch->descriptor();
         $storage = $this->policy->updateStorageLimits($state);
         $limits['file_bytes'] = min($limits['file_bytes'], intdiv($storage['max_state_bytes'], 5));
         if ($limits['file_bytes'] < 1) { throw new \RuntimeException('No bounded native update-file allocation remains.'); }
