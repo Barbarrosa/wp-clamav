@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="title desc">
+  <!-- SPDX-License-Identifier: GPL-2.0-or-later. Original WP ClamAV layout.
+       Shield geometry: Lucide shield-check, ISC; see licenses/lucide.txt and ../visual-assets.md. -->
+  <title id="title">WP ClamAV — private upload scanning for WordPress</title>
+  <desc id="desc">A document enters a bounded scanner before a publication decision. Private originals are preserved throughout.</desc>
+  <defs>
+    <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#102c37"/><stop offset="1" stop-color="#14202f"/></linearGradient>
+    <linearGradient id="accent"><stop stop-color="#94e7ca"/><stop offset="1" stop-color="#4fb4c7"/></linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M32 0H0V32" fill="none" stroke="#c7eeea" stroke-opacity=".035"/></pattern>
+  </defs>
+  <rect width="1200" height="360" rx="20" fill="url(#bg)"/>
+  <rect width="1200" height="360" rx="20" fill="url(#grid)"/>
+  <path d="M20 1H1180" stroke="url(#accent)" stroke-width="2"/>
+  <circle cx="56" cy="56" r="4" fill="#94e7ca"/>
+  <text x="72" y="61" fill="#b9d9dc" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="700" letter-spacing="2.2">PRIVATE UPLOAD SCANNING</text>
+  <text x="52" y="151" fill="#f6fbfc" font-family="Arial, Helvetica, sans-serif" font-size="68" font-weight="700" letter-spacing="-2.5">WP ClamAV<tspan fill="#94e7ca">.</tspan></text>
+  <text x="56" y="202" fill="#d4e3e8" font-family="Arial, Helvetica, sans-serif" font-size="24">Preserve the original.</text>
+  <text x="56" y="236" fill="#d4e3e8" font-family="Arial, Helvetica, sans-serif" font-size="24">Decide before publication.</text>
+  <path d="M56 282H101" stroke="#94e7ca" stroke-width="3" stroke-linecap="round"/>
+  <text x="114" y="287" fill="#a7c1cc" font-family="Arial, Helvetica, sans-serif" font-size="14">WordPress + Forminator · Local or HTTPS</text>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M735 179H809M932 179H981" stroke="#60838e" stroke-width="2"/>
+    <path d="m802 174 7 5-7 5m172-10 7 5-7 5" stroke="#94e7ca" stroke-width="2"/>
+    <rect x="624" y="108" width="112" height="142" rx="14" fill="#1a3945" stroke="#3c626e"/>
+    <path d="M656 139h31l18 18v61h-49zM687 139v18h18M667 178h26m-26 12h26m-26 12h16" stroke="#b8dedc" stroke-width="2"/>
+    <rect x="811" y="119" width="120" height="120" rx="26" fill="#173d45" stroke="#6bc8b2"/>
+    <path d="M827 145v-9h9m70 9v-9h-9m-70 77v9h9m70-9v9h-9" stroke="#94e7ca" stroke-width="2"/>
+    <g transform="translate(840 148) scale(2.6)" stroke="#a5efd3" stroke-width="1.4">
+      <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/>
+      <path d="m9 12 2 2 4-4"/>
+    </g>
+  </g>
+  <g font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="700" letter-spacing="1">
+    <rect x="984" y="119" width="142" height="34" rx="9" fill="#25463f" stroke="#497365"/>
+    <circle cx="1002" cy="136" r="3" fill="#94e7ca"/><text x="1017" y="140" fill="#bcf1d9">CLEAN</text>
+    <rect x="984" y="162" width="142" height="34" rx="9" fill="#3b3730" stroke="#6e6250"/>
+    <circle cx="1002" cy="179" r="3" fill="#e5c48f"/><text x="1017" y="183" fill="#f2dbb8">HELD</text>
+    <rect x="984" y="205" width="142" height="34" rx="9" fill="#3d303b" stroke="#735568"/>
+    <circle cx="1002" cy="222" r="3" fill="#e8aebf"/><text x="1017" y="226" fill="#f2c7d4">DETECTED</text>
+  </g>
+  <text x="625" y="279" fill="#9fbac4" font-family="Arial, Helvetica, sans-serif" font-size="13">Original bytes. Explicit limits. Recorded decisions.</text>
+</svg>

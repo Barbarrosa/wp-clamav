@@ -1,140 +1,127 @@
-# WP ClamAV
+<a name="wp-clamav"></a>
 
-A small PHP 8.2+ WordPress plugin that preserves uploads privately, scans the
-original bytes, and records a decision before WordPress may publish a copy.
-It supports WordPress upload/sideload APIs and Forminator 1.58.4, including
-Forminator's separate AJAX uploader. No Composer dependencies, resident daemon,
-root access, Python, or on-site compilation are required by the website plugin.
+<p align="center">
+  <picture>
+    <source media="(max-width: 640px)" srcset="docs/assets/hero-mobile.svg">
+    <img src="docs/assets/hero.svg" alt="WP ClamAV — private upload scanning for WordPress. Preserve the original; decide before publication." width="1200">
+  </picture>
+</p>
 
-**Experimental implementation; actual SiteGround GrowBig deployment is not yet
-qualified.** The first native build targets Linux x86-64/glibc 2.36. A matching
-architecture does not establish sufficient hosting permissions or capacity.
-Protection starts only after explicit configuration and enabling the plugin.
+<p align="center">
+  <a href="https://github.com/Barbarrosa/wp-clamav/actions/workflows/compact-plugin.yml"><img src="https://github.com/Barbarrosa/wp-clamav/actions/workflows/compact-plugin.yml/badge.svg?branch=main" alt="Plugin qualification CI"></a>
+  <a href="docs/getting-started.md#check-compatibility"><img src="docs/assets/badges/php.svg" alt="PHP 8.2 or newer"></a>
+  <a href="LICENSE"><img src="docs/assets/badges/license.svg" alt="License: GPL-2.0-or-later"></a>
+  <a href="#project-status"><img src="docs/assets/badges/status.svg" alt="Status: experimental"></a>
+</p>
 
-## Scan and retention behavior
+<p align="center">
+  <a href="docs/getting-started.md"><strong>Get started</strong></a> ·
+  <a href="docs/README.md">Documentation</a> ·
+  <a href="docs/architecture.md">Architecture</a> ·
+  <a href="CONTRIBUTING.md">Contribute</a>
+</p>
 
-- `full` uses all authenticated database rules. The optional
-  `pdf-jpeg-png-pe-exclusions` profile omits only provably eligible PE rules.
-  Generic, effect, dependency, custom and uncertain rules stay loaded. A file
-  that reaches an excluded capability is held, including embedded executables;
-  its filename or declared MIME type cannot make it clean.
-- Clean means completed, qualified coverage with matching original hash and
-  length. Detections, capability holds and failed/incomplete work are distinct.
-  Errors and exhausted budgets do not approve publication. Administrators can
-  request a full scan or make an explicit, audited manual publication decision.
-- Accepted originals, partial receipts, narrative, and immutable scan history
-  remain on the website indefinitely. Link expiry, update failure, deactivation,
-  uninstall and resource pressure never purge them. Explicit deletion is audited.
-  Back up the complete private store and WordPress database together.
-- Forminator narrative can be submitted when an attachment is missing, held or
-  failed. Protected file fields contain private receipt references rather than
-  public paths. An unqualified Forminator version holds attachments. An empty
-  protected-form list means all Forminator forms.
+**WP ClamAV** preserves upload originals in private storage, scans their exact
+bytes, and records a decision before WordPress may publish a copy. It supports
+WordPress upload and sideload APIs, plus Forminator's normal and AJAX uploads.
 
-The plugin covers uploads through its WordPress/Forminator integration points.
-Plugins that write directly to arbitrary public filesystem paths need their own
-adapter. Existing public uploads are not retrospectively made private.
+| <img src="docs/assets/icons/shield-check.svg" width="28" height="28" alt=""><br>Private by default | <img src="docs/assets/icons/settings-2.svg" width="28" height="28" alt=""><br>Bounded scanner work | <img src="docs/assets/icons/scan-line.svg" width="28" height="28" alt=""><br>Choose your coverage |
+| :--- | :--- | :--- |
+| Originals and history stay until explicit deletion. | One shared slot. CPU pacing. Explicit work limits. | Full database or guarded PDF/JPEG/PNG profile. |
 
-## Installation
+## Project status
 
-1. Install the plugin ZIP from a reviewed build and activate it. It starts disabled.
-2. Create a private directory outside **every** website document root, owned by
-   the PHP account and mode `0700`. Configure its absolute path in **WP ClamAV**.
-   Do not put originals, programs, state, or credentials in public uploads.
-3. Choose local execution or an authenticated HTTPS remote gateway. Local mode
-   uses this project's `compact-scan`/`compact-update` native bundle; remote mode
-   streams originals to the configured service and retains the canonical local
-   original. Prefer `WP_CLAMAV_REMOTE_TOKEN` in server configuration for credentials.
-4. Review Diagnostics and configure the site's verified allocations. Missing
-   required capacity inputs hold the affected work. There is no universal
-   GrowBig memory, upload-size, storage, CPU or email default.
-5. Configure Forminator form IDs, profile and notification rules. Test clean,
-   EICAR, held and failed examples on a staging site before enabling protection.
-6. Schedule WordPress due events with the hosting scheduler. The worker schedule
-   is 30 minutes; direct FreshClam checks are spaced at least two hours and honor
-   persistent upstream cooldown. WP-Cron alone depends on site traffic.
+> **Experimental · staging first.** Actual SiteGround GrowBig deployment is not
+> qualified. The plugin starts disabled and needs confirmed storage, CPU, memory
+> and mail allocations. Unknown capacity holds the affected work.
 
-For local code bootstrap, configure the native release verification public key
-and opt into the appropriate signed channel, then run updates. The installer
-stages code; the native updater validates its database before selecting the
-complete program/database tuple. Alternatively configure absolute paths to an
-authenticated, unpacked matching native bundle. State defaults to
-`<private-root>/native-state` and programs to `<private-root>/programs`.
-
-Native and plugin updates have separate public keys. Set standard base64 Ed25519
-32-byte public keys through `WP_CLAMAV_NATIVE_RELEASE_PUBLIC_KEY` and
-`WP_CLAMAV_PLUGIN_RELEASE_PUBLIC_KEY`, or their settings fields. The plugin
-repository is `Barbarrosa/wp-clamav`; native code comes from `Barbarrosa/clamav`.
-No signing private key is distributed. Missing verification keys disable code
-installation; they do not disable official database maintenance of an existing
-configured native installation. See [release procedures](docs/releases.md).
-
-## Resource configuration
-
-Diagnostics preserves PHP observations separately from user allocations, provider
-references and policy. PHP memory, native resident memory and native virtual
-address space are different constraints. Confirm actual hosting limits and
-measure the selected engine/database; a historical test snapshot is not a future
-database bound. At least 20% measured-workload headroom is policy, not entitlement.
-
-Configure budgets as finite nonnegative numbers using the units in their names:
-
-| Operation | Required allocation inputs |
+| Component | Requirement or tested target |
 | --- | --- |
-| Indefinite storage | `storage_bytes`, `storage_reserve_bytes`, `update_reserve_bytes`; confirm `account_remaining_bytes`, `inodes_remaining`, `inode_reserve`, `quota_observed_at` when available |
-| Intake | PHP/WordPress/Forminator constraints are detected; optionally tighten `file_bytes`, `request_bytes`, `server_body_bytes`, `files_per_request` |
-| Native work | `native_as_bytes`, `native_cpu_seconds`, `native_file_bytes`, `worker_wall_seconds`, `request_work_seconds`, `cleanup_seconds`, `cpu_hourly_seconds`, `cpu_daily_seconds`, `cpu_monthly_seconds` |
-| Native RAM | Confirm `native_process_bytes`, `native_account_available_bytes`; AS is capped at 80% of the smaller allocation. Historical RSS cannot raise the ceiling |
-| PHP/remote work | `php_work_bytes`, request/worker wall and cleanup; optionally `proxy_remaining_seconds` |
-| Official updates | `update_line_bytes`, `update_state_inodes`, confirmed account bytes/inodes and inode reserve, `freshclam_connect_seconds`, `freshclam_low_speed_seconds`, `freshclam_max_attempts`; optional tighter `update_wall_seconds` |
-| Code downloads | `code_staging_bytes`, `code_update_seconds`, confirmed account remainder and the request/worker deadline; plugin downloads have their separately configured byte/time budgets |
-| Mail | `mail_message_bytes`, `mail_php_bytes`, `mail_message_overhead_bytes`, `mail_memory_multiplier`, `mail_recipient_hourly`, `mail_reserve_hourly`, `other_mail_hourly`; confirm `mail_provider_hourly`, optionally tighten `mail_attachment_bytes` |
+| PHP | **8.2+**; no Composer dependencies |
+| WordPress | Declared minimum **6.4**; integration fixture **7.1.4** |
+| Forminator | Adapter qualified for **1.58.4**; other versions hold attachments |
+| Local native bundle | Linux **x86-64 / glibc 2.36** target; hosting capacity and permissions need separate checks |
+| Releases | CI produces pending candidates; installable signed releases require protected promotion and configured keys |
 
-Quota observations subtract subsequent private-store growth. They cannot observe
-other websites or other account activity. CPU and recipient reservations are
-shared by network sites; private storage allocation is divided by site count.
-Storage includes metadata and inodes, with crash recovery before further
-admission. Canonical JSON records have a 1 MiB format ceiling; oversized narrative
-is rejected explicitly rather than truncated. Capacity pressure stops new work
-and requires operator action; it never removes prior submissions.
+The website plugin needs no resident daemon, root access, Python or on-site
+compilation. Native binaries and databases are separate from the plugin ZIP.
+An optional remote gateway has its own deployment requirements.
 
-Operational accounting also measures retained native generations, code packages,
-and PHP scratch against account remainder. Native updates enforce a separate total
-state ceiling while preserving 20% monitoring headroom. Monitoring complements
-hosting quotas; it is not a kernel-enforced account quota. Adding network sites
-requires fresh quota confirmation before shares can be redistributed.
+<a name="installation"></a>
+<a name="resource-configuration"></a>
 
-Database freshness defaults to 48 hours as a security policy. OTP/invitation
-lifetimes are independent security policies and do not alter retention.
+## Start on a staging site
 
-One account-wide OS lock admits scans and maintenance before hashing, copying or
-native startup. Native descendants retain its descriptor through process exit,
-including when the PHP supervisor dies. Scans can spend at most 80% of each
-confirmed rolling CPU allocation and are paced across the month, with at least
-one CPU-second charged per admitted scan. Maintenance has priority over new scans.
-An unknown allocation or busy slot defers work while originals remain private.
-Uploads share one coalesced queue wake; unsubmitted Forminator AJAX originals and
-known policy-held files never start an automatic scan. See
-[scan dispatch](docs/scan-dispatch.md) and [resource constraints](docs/resource-constraints.md).
+1. Install a reviewed plugin ZIP and keep protection disabled during setup.
+2. Configure private storage outside **every** website document root.
+3. Choose a verified local native bundle or an authenticated HTTPS gateway.
+4. Enter confirmed resource allocations, select a profile, and configure notifications.
+5. Enable protection on staging, test all outcomes and scheduling, then apply the qualified configuration to the live site.
 
-## Notifications and testing
+Follow the [installation guide](docs/getting-started.md) for exact UI locations,
+backend choices and the staging checklist. The
+[configuration reference](docs/configuration.md) explains every allocation group.
 
-Multiple rules and recipients can receive each event. Original attachments and
-recipient-verified review links are independently opt-in. Failed/incomplete scans
-never allow attachments, embedded originals, or download grants, including resend.
-GET links do not send an OTP or download bytes. Mail acceptance is not proof of
-inbox delivery. See [notifications](docs/notifications.md) and
-[storage accounting](docs/storage-accounting.md).
+<a name="scan-and-retention-behavior"></a>
 
-Run `php tests/run.php` for isolated contracts. Run
-`python3 -m unittest discover -s tools -p 'test_*.py'` for packaging. Real WordPress,
-Forminator, multisite and native tests require the explicitly marked disposable
-fixtures documented by their runners. GitHub Actions builds pinned environments,
-executes these checks and produces pending artifacts; protected promotion signs
-the exact tested artifact without rebuilding it. No workflow deploys a live site.
+## How it works
 
-The `SubmissionStore` interface separates canonical persistence from intake and
-notification behavior for a future external datastore. This release implements
-private on-site storage and performs no external data migration.
+<picture>
+  <source media="(max-width: 640px)" srcset="docs/assets/upload-flow-mobile.svg">
+  <img src="docs/assets/upload-flow.svg" alt="WordPress upload hooks and eligible final Forminator submissions share preserved private originals and a resource gate. Qualified clean results allow automatic publication; other outcomes remain private." width="1200">
+</picture>
 
-GPL-2.0-or-later; see [LICENSE](LICENSE).
+WordPress upload hooks assess synchronously. Forminator queues scans only after
+a trusted final submission; its narrative remains independent of scan completion.
+One bounded dispatch path handles retries and refuses duplicate engine work.
+
+- **Publication:** automatic release needs a completed, qualified clean result
+  bound to the original hash and length. Administrators can request a full scan
+  or record an explicit, audited manual decision.
+- **Profiles:** `full` is the default. `pdf-jpeg-png-pe-exclusions` retains generic,
+  effect, dependency, custom and uncertain rules. Reaching an excluded capability holds
+  the original, including embedded executables.
+- **Notifications:** multiple rules and recipients; original attachments and
+  email-verified review links are separately opt-in. Failed or incomplete work
+  never creates file-sharing capabilities. Completed held/detected review has
+  its own eligibility rules.
+- **Updates:** plugin code and native code use authenticated release channels.
+  On-site FreshClam retrieves database updates directly from original ClamAV
+  sources. Maintenance has priority and reserved CPU capacity.
+
+See the [architecture](docs/architecture.md), [notification policy](docs/notifications.md)
+and [scan dispatch](docs/scan-dispatch.md) references for the precise boundaries.
+Plugins that write directly to arbitrary public paths need their own adapter;
+existing public uploads are not retrospectively made private.
+
+<a name="notifications-and-testing"></a>
+
+## Find the right guide
+
+| I want to… | Start here |
+| --- | --- |
+| Install and qualify a staging site | [Getting started](docs/getting-started.md) |
+| Configure limits or understand a hold | [Configuration](docs/configuration.md) · [Troubleshooting](docs/troubleshooting.md) |
+| Operate notifications and retained data | [Notifications](docs/notifications.md) · [Storage](docs/storage-accounting.md) |
+| Change an adapter, backend or datastore boundary | [Architecture](docs/architecture.md) · [Development](docs/development.md) |
+| Build, sign or promote a release | [Release guide](docs/releases.md) |
+
+## Develop locally
+
+With PHP 8.2+ and Python 3 available, run from the repository root:
+
+```sh
+php tests/run.php
+python3 tools/lint_php.py --source .
+python3 -m unittest discover -s tools -p 'test_*.py'
+```
+
+Real WordPress/Forminator, multisite and native tests use explicitly marked
+disposable fixtures. See [development](docs/development.md) and
+[contributing](CONTRIBUTING.md) before running them. CI builds pinned environments
+and never deploys a live site.
+
+<hr>
+
+GPL-2.0-or-later · [License](LICENSE) · [Visual sources and licenses](docs/visual-assets.md)
+· [Documentation index](docs/README.md)

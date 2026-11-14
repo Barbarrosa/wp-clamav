@@ -1,0 +1,138 @@
+{
+  "schema": 1,
+  "upstream_repository": "https://github.com/lucide-icons/lucide",
+  "upstream_commit": "55782beff3a0133df79c417eb68f96e8f19e2404",
+  "license_source": "https://github.com/lucide-icons/lucide/blob/55782beff3a0133df79c417eb68f96e8f19e2404/LICENSE",
+  "license_file": "licenses/lucide.txt",
+  "files": [
+    {
+      "file": "icons/shield-check.svg",
+      "upstream_path": "icons/shield-check.svg",
+      "upstream_url": "https://github.com/lucide-icons/lucide/blob/55782beff3a0133df79c417eb68f96e8f19e2404/icons/shield-check.svg",
+      "changes": [
+        "Added source/license comment",
+        "Replaced currentColor stroke with #0f766e"
+      ],
+      "upstream_sha256": "8d4fcdbde5bba4abb1a2f6fe53e37ceb6343a1d5449a9d88f6f97c1971d26c4e",
+      "sha256": "11dafce6d6915de9dabe126b7dea045eb1c9a1dd00fcc5240268fa0f58e3e807",
+      "license_notice": "licenses/lucide.txt",
+      "license": "ISC; applicable Feather-derived portions MIT"
+    },
+    {
+      "file": "icons/book-open.svg",
+      "upstream_path": "icons/book-open.svg",
+      "upstream_url": "https://github.com/lucide-icons/lucide/blob/55782beff3a0133df79c417eb68f96e8f19e2404/icons/book-open.svg",
+      "changes": [
+        "Added source/license comment",
+        "Replaced currentColor stroke with #0f766e"
+      ],
+      "upstream_sha256": "9b9bed0ff057283d5c5c5a1c71f8d3e927db26a56639603a92fdf7b25961510e",
+      "sha256": "6a1ec17981997bd1734f16204126bbce3382d51a26798c38da51642b224932ce",
+      "license_notice": "licenses/lucide.txt",
+      "license": "ISC; applicable Feather-derived portions MIT"
+    },
+    {
+      "file": "icons/code-xml.svg",
+      "upstream_path": "icons/code-xml.svg",
+      "upstream_url": "https://github.com/lucide-icons/lucide/blob/55782beff3a0133df79c417eb68f96e8f19e2404/icons/code-xml.svg",
+      "changes": [
+        "Added source/license comment",
+        "Replaced currentColor stroke with #0f766e"
+      ],
+      "upstream_sha256": "a6d2110227be375be21da7324d3c09262c1bf019d06bdeab356d515342ab7cce",
+      "sha256": "d01c21a260ee4742acd7b1df2d2b6fad88e83c7ff08f72bae480f598a25e9a5b",
+      "license_notice": "licenses/lucide.txt",
+      "license": "ISC; applicable Feather-derived portions MIT"
+    },
+    {
+      "file": "icons/settings-2.svg",
+      "upstream_path": "icons/settings-2.svg",
+      "upstream_url": "https://github.com/lucide-icons/lucide/blob/55782beff3a0133df79c417eb68f96e8f19e2404/icons/settings-2.svg",
+      "changes": [
+        "Added source/license comment",
+        "Replaced currentColor stroke with #0f766e"
+      ],
+      "upstream_sha256": "06d06c191bd7eb28afaf9d40acb5c49ef69448fdeda91801d9823d7c440a4e10",
+      "sha256": "256f943be5a6a44a207b1d3c6cd27960c3f437ee3214899de17cc734559fa6a4",
+      "license_notice": "licenses/lucide.txt",
+      "license": "ISC; applicable Feather-derived portions MIT"
+    },
+    {
+      "file": "icons/server.svg",
+      "upstream_path": "icons/server.svg",
+      "upstream_url": "https://github.com/lucide-icons/lucide/blob/55782beff3a0133df79c417eb68f96e8f19e2404/icons/server.svg",
+      "changes": [
+        "Added source/license comment",
+        "Replaced currentColor stroke with #0f766e"
+      ],
+      "upstream_sha256": "f7bea54b609dc488f3b848995014041846b2443fd2a880653e9e583d7a034f61",
+      "sha256": "4a7a906339cafc7d6737db0b52d86d515990e86051338ca74c2b98c6b9a8413b",
+      "license_notice": "licenses/lucide.txt",
+      "license": "ISC; applicable Feather-derived portions MIT"
+    },
+    {
+      "file": "icons/scan-line.svg",
+      "upstream_path": "icons/scan-line.svg",
+      "upstream_url": "https://github.com/lucide-icons/lucide/blob/55782beff3a0133df79c417eb68f96e8f19e2404/icons/scan-line.svg",
+      "changes": [
+        "Added source/license comment",
+        "Replaced currentColor stroke with #0f766e"
+      ],
+      "upstream_sha256": "d17ec0ebae568a92e18e18968bb85658fec088bc3d97b92b729df6f7f9c4848e",
+      "sha256": "335dc9c6423063c8f59bcd553921c3364132e73a6c8e07d765ef43c5d7d4ddcc",
+      "license_notice": "licenses/lucide.txt",
+      "license": "ISC; applicable Feather-derived portions MIT"
+    },
+    {
+      "file": "hero-mobile.svg",
+      "source": "Original WP ClamAV project artwork",
+      "license": "GPL-2.0-or-later",
+      "sha256": "23b8a0dbe64cd68e07faa4fa187c6faa477189232b561b0ededfc28db531816d",
+      "incorporates": [
+        "icons/shield-check.svg"
+      ],
+      "third_party_notice": "licenses/lucide.txt"
+    },
+    {
+      "file": "hero.svg",
+      "source": "Original WP ClamAV project artwork",
+      "license": "GPL-2.0-or-later",
+      "sha256": "de960d845de047b77c175cba27d9922ea51a1aa5fee361ddf26adc4351c91599",
+      "incorporates": [
+        "icons/shield-check.svg"
+      ],
+      "third_party_notice": "licenses/lucide.txt"
+    },
+    {
+      "file": "upload-flow-mobile.svg",
+      "source": "Original WP ClamAV project artwork",
+      "license": "GPL-2.0-or-later",
+      "sha256": "300ab471b9ad999a3d2572115c4531837b547aeaae94777a6b524a2ad9fa93ba"
+    },
+    {
+      "file": "upload-flow.svg",
+      "source": "Original WP ClamAV project artwork",
+      "license": "GPL-2.0-or-later",
+      "sha256": "2fc973a82c0d80144ef657373d716ace3c1c2ae485b2a3b7b4c7cb6267d06cf9"
+    },
+    {
+      "file": "badges/license.svg",
+      "source": "Original WP ClamAV project artwork",
+      "license": "GPL-2.0-or-later",
+      "sha256": "c55087cdf62275e2f8613ec787f4326abca08c09b607680a18aa4c9d17d990e4"
+    },
+    {
+      "file": "badges/php.svg",
+      "source": "Original WP ClamAV project artwork",
+      "license": "GPL-2.0-or-later",
+      "sha256": "66fbe2f4e61c0127cebb2402ec4e73774d5e3e64b83222b470163b81a6352555"
+    },
+    {
+      "file": "badges/status.svg",
+      "source": "Original WP ClamAV project artwork",
+      "license": "GPL-2.0-or-later",
+      "sha256": "d97657a1912b266ccf6e068465eb60ca74793aae1840297e8fc9470a7038ade3"
+    }
+  ],
+  "license_sha256": "b495047bd93a9b06913511076f504daba17d5bbeb3e0650f3bb53a4220329c57"
+}

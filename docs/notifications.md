@@ -1,43 +1,162 @@
-# Scan notifications and recipient-verified review downloads
+<p><a href="../README.md">WP ClamAV</a> / <a href="README.md">Documentation</a></p>
 
-Each configured rule selects scan outcomes and optionally Forminator form IDs. It has explicit recipient addresses, a plain-text template, and independent original-attachment and download-link options. Matching rules enqueue **one message per recipient**; no CC/BCC recipient list is disclosed. Recipients are never read from an untrusted upload field.
+<a name="scan-notifications-and-recipient-verified-review-downloads"></a>
 
-The initial rule sends result-only `detected`, `held`, and `failed` notices to the site administrator. Clean notices and file sharing are off until configured. All automatic delivery is subject to the site's confirmed mail allocation; an unknown budget leaves notifications queued.
+# Notifications and review downloads
 
-## File-sharing boundary
+Send a separate scan report to each recipient. Enable original attachments or
+email-verified review links only where your review process needs them.
 
-Original sharing requires a completely preserved, undeleted original, a completed eligible scan event, matching hashes/sizes, and that same event still being the receipt's current attempt. A clean event also requires qualified coverage. A completed held or detected original can be shared only through an explicitly enabled review rule; that is not upload-publication approval.
+> Failed or incomplete scans can send result-only reports. They cannot issue an
+> attachment, embed, or download capability.
 
-Failed, incomplete, interrupted, stale, changed, or missing originals never produce original attachments, embeds, or download capabilities. The check applies to preparation, the final mail boundary, resend, OTP requests and download. A new assessment immediately makes older sharing capabilities unusable. Reconciliation of an older event cannot revoke a newer valid grant or give the older event newer permissions.
+**On this page:** [Rules](#choose-events-and-recipients) ·
+[File sharing](#control-when-files-can-be-shared) ·
+[Email verification](#verify-the-recipient-before-download) ·
+[Delivery](#understand-delivery-and-retries) · [Testing](#verify-changes)
 
-Native limit, parser, encrypted-content and unknown-layer warnings withhold assets even when a protocol envelope reports `completed` or contains a detection. These events can still send result-only notifications. An expansion-limit heuristic is not evidence that every member was scanned.
+## Choose events and recipients
 
-Attachments are verified private temporary copies removed when the synchronous mail call ends. Their size limit comes from the resource policy, including base64 line wrapping and PHP mail-assembly memory. Unknown or insufficient attachment capacity gives a text-only message or the independently enabled review link; it never silently enables a link.
+Each rule selects outcomes, optional Forminator form IDs, explicit recipient
+addresses, and plain-text templates. Matching rules enqueue **one message per
+recipient**. No CC/BCC list is disclosed, and upload fields never supply recipients.
 
-## Email verification
+| Rule field | Behavior |
+| --- | --- |
+| `events` | Select `clean`, `detected`, `held`, or `failed`. |
+| `form_ids` | Restrict a rule to selected Forminator forms; an empty list adds no form restriction. |
+| `recipients` | Explicit addresses; multiple rules and multiple recipients may match an event. |
+| `attach_original` | Independently opt into original attachments, subject to eligibility and capacity. |
+| `include_download_link` | Independently opt into recipient-verified review links. |
+| `subject`, `body` | Plain-text templates using the supported placeholders below. |
 
-Review links expose only a landing page. Opening a GET sends no code and reads no original bytes. A nonce-protected POST queues an OTP to the rule's configured recipient. Verification grants a short-lived Secure, HttpOnly, SameSite=Strict browser session; downloading remains a POST and rechecks the current file/event/hash.
+The initial administrator rule selects `detected`, `held`, and `failed` and sends
+result-only reports. Clean notices and both sharing options start off. An unknown
+mail allocation leaves notifications queued until capacity is confirmed.
 
-Invitation secrets, OTPs and browser-session secrets are stored only as hashes/HMACs. Codes begin their lifetime when dispatched, rather than while waiting for mail capacity. Security-policy defaults are a 24-hour invitation, 10-minute OTP, 15-minute verified browser session, three code requests per recipient/window, and five verification attempts per challenge. These are security settings, not hosting-resource entitlements. Recipient and requester throttles are shared across requests. Requester fingerprints use the direct server peer address and are stored as HMACs; untrusted forwarded-IP headers cannot bypass throttling.
+<details>
+<summary>Template reference</summary>
 
-Changing notification rule settings advances an epoch, invalidating previously issued grants even if the same settings are later restored. Expiry or revocation never removes retained originals or scan history.
+Supported placeholders are `{status}`, `{name}`, `{size}`, `{sha256}`, `{findings}`,
+`{reasons}`, `{engine_version}`, `{generation_id}`, `{profile}`, `{coverage}`,
+`{timestamp}`, `{receipt_id}`, `{event_id}`, and `{download_link}`.
 
-## Delivery state
+Templates contain no executable PHP or arbitrary attachment paths. Private
+filesystem locations are not rendered. A rendering failure falls back to a
+minimal result-only report.
 
-The durable outbox deduplicates automatic `(event, rule, recipient)` delivery, leases rows to workers, retries transport failures within a configured attempt bound, and recovers expired worker leases. Manual resend records a new request identifier, administrator and reason; it keeps the original scan-event restrictions.
+</details>
 
-`accepted` means the mail transport accepted the request. It does not prove inbox delivery. A process failure between sending and recording acceptance can cause a duplicate; there is no exactly-once-delivery claim. Capacity deferral does not consume a transport attempt. OTPs and retries consume the same recipient allocation as other plugin mail.
+<a name="file-sharing-boundary"></a>
 
-Templates support only documented placeholders and contain no executable PHP or arbitrary attachment paths. Private filesystem locations are not rendered. Rendering failures fall back to a minimal result-only report. The WordPress mail adapter clears attachments and embeds at its scoped final mail boundary before adding only the manager-authorized copies.
+## Control when files can be shared
 
-Email attachments create independent copies outside website retention controls. Removing a local original or expiring a link cannot delete those copies.
+All sharing requires a completely preserved, undeleted original, matching hash
+and size, and a completed eligible event that is still the receipt's current
+attempt. A clean event also requires qualified coverage and applicability.
 
-## Verification
+| Current result | Attachment or review link |
+| --- | --- |
+| Qualified, completed `clean` | Available only through an explicitly enabled rule. |
+| Eligible, completed `detected` or `held` | Available only through an explicitly enabled review rule; this does not approve publication. |
+| Failed, incomplete, interrupted, stale, changed, or missing original | Withheld at every sharing boundary. |
 
-`php tests/notifications.php` checks the outcome/completion matrix, per-recipient rules, retries, leases, OTP and session boundaries, stale-event reconciliation, tampering and capacity behavior.
+Native warnings also withhold assets when the protocol envelope says `completed`
+or includes a detection. The denied reason families are
+`scan-limit-encryption-or-parser-alert`, `parser-error`, `encrypted-content`, and
+`unknown-or-unsupported-layer`. An expansion-limit heuristic does not establish
+that every member was scanned. Result-only notifications remain available.
 
-With a disposable WordPress database, `tests/notifications-database.php` exercises real wpdb SQL. `tests/notifications-wordpress-http.php` additionally uses the running WordPress HTTP server to check real nonces, cookies, GET/POST behavior and revocation. Configure `WP_CLAMAV_WORDPRESS_DIR` and `WP_CLAMAV_HTTP_BASE`; these tests create and clean their own tables and fixture storage, and send no external mail.
+Eligibility is checked during preparation, at the final mail boundary, on resend,
+and throughout OTP and download handling. A new assessment immediately invalidates
+older sharing capabilities. Reconciliation cannot give an older event newer
+permissions or revoke a newer valid grant.
 
-The manager revalidates the outbox lease immediately before transport side effects. Replacement workers receive separate grant identities, preventing an expired worker from revoking a newer invitation. This reduces overlapping-worker duplicates; a crash after transport acceptance but before acknowledgment still permits a later repeated email. SMTP acceptance is not delivery confirmation.
+Attachments are verified private temporary copies, removed when the synchronous
+mail call ends. Capacity includes base64 line wrapping and PHP mail assembly.
+An oversized attachment is omitted with explanatory text. A review link may
+remain only if it was independently enabled; the plugin never enables one as an
+implicit fallback.
 
-Complete-message and PHP assembly checks apply to OTP and result-only reports as well as attachments. Only originals actually attached are charged as original mail bytes; retained originals do not inflate data-only report memory calculations. Text transfer encoding, MIME line folding and a configured header/framing reserve are included. See [resource constraints](resource-constraints.md) for the integration contract and unknown-capacity behavior.
+> Email attachments create independent copies. Local deletion, link expiry, or
+> moving website storage cannot remove copies already held in mail systems.
+
+<a name="email-verification"></a>
+
+## Verify the recipient before download
+
+1. The recipient opens a review link. Its GET request shows a landing page; it
+   sends no code and reads no original bytes.
+2. A nonce-protected POST queues an OTP to the rule's configured email address.
+3. Verification creates a short-lived browser session with `Secure`, `HttpOnly`,
+   and `SameSite=Strict` cookies.
+4. Download uses a POST and rechecks the current file, event, and hash.
+
+| Security policy | Default |
+| --- | --- |
+| Invitation lifetime | 24 hours |
+| OTP lifetime | 10 minutes, starting when dispatched |
+| Verified browser session | 15 minutes |
+| Code requests | 3 per recipient/window |
+| Verification attempts | 5 per challenge |
+
+These are security policies, not hosting-resource entitlements. Invitation, OTP,
+and browser-session secrets are stored only as hashes or HMACs. Recipient and
+requester throttles are shared across requests. Requester fingerprints use the
+direct server peer address and are HMACs; untrusted forwarded-IP headers do not
+change the throttle identity.
+
+Editing notification rules advances an epoch and invalidates existing grants,
+even if the former settings are later restored. Expiry and revocation never
+remove retained originals or scan history.
+
+<a name="delivery-state"></a>
+
+## Understand delivery and retries
+
+The durable outbox deduplicates automatic `(event, rule, recipient)` deliveries,
+leases rows to workers, retries transport failures within the configured attempt
+bound, and recovers expired leases. Manual resend creates a new request with an
+administrator and reason; it retains the original event's sharing restrictions.
+
+Capacity deferral does not consume a transport attempt. OTP messages and retries
+use the same recipient allocation as other plugin mail. Complete-message and PHP
+assembly limits apply to result-only messages and OTPs as well as attachments.
+Only originals actually attached count as original mail bytes; retaining a large
+file does not inflate a result-only report's memory calculation.
+
+The manager revalidates the lease immediately before transport. Replacement
+workers receive separate grant identities, so an expired worker cannot revoke a
+newer invitation. The scoped WordPress mail adapter clears attachments and embeds
+before adding only manager-authorized copies.
+
+`accepted` means the transport accepted the message, not that it reached an inbox.
+A crash after acceptance and before acknowledgment can cause a duplicate.
+Exactly-once delivery is not guaranteed.
+
+<a name="verification"></a>
+
+## Verify changes
+
+Run the isolated notification contracts:
+
+```sh
+php tests/notifications.php
+```
+
+They cover outcomes and completion, per-recipient rules, capacity, leases,
+retries, OTP/session boundaries, stale reconciliation, tampering, and asset policy.
+
+For real WordPress integration, use the disposable fixtures documented in
+[development](development.md) and [the WordPress test guide](../tests/wordpress/README.md):
+
+| Suite | Coverage |
+| --- | --- |
+| [`notifications-database.php`](../tests/notifications-database.php) | Actual wpdb SQL. |
+| [`notifications-wordpress-http.php`](../tests/notifications-wordpress-http.php) | Real nonces, cookies, GET/POST rules, and revocation. |
+
+Set `WP_CLAMAV_WORDPRESS_DIR` and `WP_CLAMAV_HTTP_BASE`. These suites create and
+clean their own test tables and fixture storage and send no external email.
+
+**Related:** [Resource budgets](resource-constraints.md) ·
+[Retention and storage](storage-accounting.md) · [Troubleshooting](troubleshooting.md)

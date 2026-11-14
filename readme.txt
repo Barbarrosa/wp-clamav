@@ -10,21 +10,34 @@ Privately preserve and scan WordPress/Forminator uploads with authenticated Clam
 
 == Description ==
 
-Experimental implementation. Requires explicit private storage, verified resource
-allocations and a compatible native bundle or authenticated HTTPS scanning service.
-Actual SiteGround GrowBig deployment is not yet qualified. Starts disabled.
+WP ClamAV preserves upload originals privately, scans their exact bytes and records
+a decision before WordPress may publish a copy. Supports WordPress upload/sideload
+APIs and Forminator 1.58.4, including the separate AJAX uploader.
 
-Supports Forminator 1.58.4. Retains originals and submission history indefinitely
-until explicit deletion. Failed scans never create file-sharing capabilities.
-Multiple notification recipients and optional email-verified review links.
+* Keep accepted originals, narrative and history until explicit deletion.
+* Choose the full database or the guarded PDF/JPEG/PNG profile with PE exclusions.
+* Bound ClamAV work with shared admission, CPU pacing and memory/time limits.
+* Send per-recipient reports with independently enabled attachments or verified links.
+* Update code through authenticated releases and databases directly from ClamAV sources.
 
-See README.md for installation, resource constraints, retention and test details.
+Experimental; starts disabled. Actual SiteGround GrowBig deployment is not yet
+qualified. Configure private storage, confirmed resource allocations and a verified
+native bundle or authenticated HTTPS service. Failed or incomplete scans cannot
+create file-sharing capabilities.
+
+Start with README.md and docs/getting-started.md. Browse docs/README.md for
+configuration, troubleshooting, architecture, development and release references.
 
 == Installation ==
 
-Upload the reviewed plugin ZIP and activate it. Configure WP ClamAV before enabling
-protection. Private storage must be outside all document roots. No live-site
-configuration, data cleanup or external storage migration runs on activation.
+1. Install a reviewed plugin ZIP and activate it; protection remains disabled.
+2. Open Tools > WP ClamAV, or Network Admin > Settings > WP ClamAV when network activated.
+3. Configure owner-only private storage outside every website document root.
+4. Choose a backend, confirm allocations, select a profile and configure notifications.
+5. Enable protection on staging and test outcomes/scheduling before configuring the live site.
+
+No live-site configuration, data cleanup or external storage migration runs on
+activation. Native binaries and databases are separate from the plugin ZIP.
 
 == Changelog ==
 

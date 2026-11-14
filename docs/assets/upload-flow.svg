@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="440" viewBox="0 0 1200 440" role="img" aria-labelledby="title desc">
+  <!-- SPDX-License-Identifier: GPL-2.0-or-later. Original project diagram; no external resources. -->
+  <title id="title">The upload decision path</title>
+  <desc id="desc">WordPress upload hooks assess synchronously. Forminator submits a trusted scan request to a bounded queue. Both use private originals, one resource gate and a hash-bound scan decision. Only qualified clean results approve automatic publication; held, detected, failed and deferred files remain private.</desc>
+  <defs><marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="m1 1 5 3-5 3" fill="none" stroke="#637c88" stroke-width="1.3"/></marker></defs>
+  <rect x="1" y="1" width="1198" height="438" rx="18" fill="#f6f9fa" stroke="#d4e0e5"/>
+  <g font-family="Arial, Helvetica, sans-serif">
+    <text x="32" y="40" fill="#526775" font-size="12" font-weight="700" letter-spacing="1.6">HOW AN UPLOAD BECOMES A DECISION</text>
+    <g fill="none" stroke="#637c88" stroke-width="1.5" marker-end="url(#arrow)">
+      <path d="M249 129H286V198H316"/>
+      <path d="M249 277H286V221H316"/>
+      <path d="M550 209H600"/>
+      <path d="M834 209H882V143H926"/>
+      <path d="M834 209H882V306H926"/>
+    </g>
+    <rect x="32" y="83" width="216" height="94" rx="12" fill="#fff" stroke="#cbdbe2"/>
+    <rect x="32" y="231" width="216" height="94" rx="12" fill="#fff" stroke="#cbdbe2"/>
+    <text x="50" y="114" fill="#152e3b" font-size="19" font-weight="700">WordPress hooks</text>
+    <text x="50" y="141" fill="#526775" font-size="14">Synchronous assessment</text>
+    <text x="50" y="263" fill="#152e3b" font-size="19" font-weight="700">Forminator</text>
+    <text x="50" y="290" fill="#526775" font-size="14">Upload first; queue later</text>
+    <rect x="316" y="136" width="234" height="146" rx="14" fill="#e7f3ef" stroke="#9dcbbd"/>
+    <text x="338" y="167" fill="#2d7b68" font-size="11" font-weight="700" letter-spacing="1.1">01 / PRESERVE</text>
+    <text x="338" y="199" fill="#153b33" font-size="23" font-weight="700">Private original</text>
+    <text x="338" y="228" fill="#3e665b" font-size="14">Exact bytes + receipt</text>
+    <text x="338" y="251" fill="#3e665b" font-size="14">Narrative stays independent</text>
+    <rect x="600" y="136" width="234" height="146" rx="14" fill="#fff" stroke="#b5cbd6"/>
+    <text x="622" y="167" fill="#397286" font-size="11" font-weight="700" letter-spacing="1.1">02 / ASSESS</text>
+    <text x="622" y="199" fill="#152e3b" font-size="23" font-weight="700">Resource gate</text>
+    <text x="622" y="228" fill="#526775" font-size="14">One slot · CPU / RAM / time</text>
+    <text x="622" y="251" fill="#526775" font-size="14">Local scanner or HTTPS</text>
+    <rect x="926" y="97" width="242" height="94" rx="12" fill="#e7f3ef" stroke="#9dcbbd"/>
+    <text x="945" y="128" fill="#153b33" font-size="19" font-weight="700">Qualified clean</text>
+    <text x="945" y="155" fill="#3e665b" font-size="14">Automatic publication allowed</text>
+    <rect x="926" y="246" width="242" height="121" rx="12" fill="#fff7e9" stroke="#dbc8a6"/>
+    <text x="945" y="278" fill="#654d23" font-size="19" font-weight="700">Remain private</text>
+    <text x="945" y="305" fill="#735f3a" font-size="14">Held · Detected · Failed</text>
+    <text x="945" y="330" fill="#735f3a" font-size="14">Deferred → bounded retry</text>
+    <path d="M32 394H1168" stroke="#d4e0e5"/>
+    <text x="32" y="420" fill="#526775" font-size="13">Accepted originals and history remain until explicit deletion. This diagram describes the automatic decision path.</text>
+  </g>
+</svg>

@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="1068" viewBox="0 0 600 1068" role="img" aria-labelledby="title desc">
+  <!-- SPDX-License-Identifier: GPL-2.0-or-later. Original project diagram; no external resources. -->
+  <title id="title">The upload decision path, arranged for mobile</title>
+  <desc id="desc">WordPress and Forminator first preserve a private original. WordPress assesses synchronously before the public move. Forminator queues eligible scans only after a validated final submission. Both pass a shared resource gate and use a local scanner or authenticated HTTPS. Only qualified clean results allow automatic publication. Held, detected, failed and deferred files remain private; deferred work receives a bounded retry. Originals and history remain until explicit deletion.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="m1 1 5 3-5 3" fill="none" stroke="#637c88" stroke-width="1.3"/></marker>
+  </defs>
+  <rect x="1" y="1" width="598" height="1066" rx="18" fill="#f6f9fa" stroke="#d4e0e5"/>
+  <g font-family="Arial, Helvetica, sans-serif">
+    <text x="34" y="42" fill="#526775" font-size="21" font-weight="700" letter-spacing="1.3">HOW UPLOADS BECOME DECISIONS</text>
+    <g fill="none" stroke="#637c88" stroke-width="2" marker-end="url(#arrow)">
+      <path d="M157 174V200H300V225"/>
+      <path d="M443 174V200H300" marker-end="none"/>
+      <path d="M300 378V400H157V423"/>
+      <path d="M300 400H443V423"/>
+      <path d="M157 576V600H300V621"/>
+      <path d="M443 576V600H300" marker-end="none"/>
+      <path d="M300 776V800H157V821"/>
+      <path d="M300 800H443V821"/>
+    </g>
+
+    <rect x="34" y="74" width="246" height="100" rx="13" fill="#fff" stroke="#cbdbe2"/>
+    <rect x="320" y="74" width="246" height="100" rx="13" fill="#fff" stroke="#cbdbe2"/>
+    <text x="52" y="112" fill="#152e3b" font-size="30" font-weight="700">WordPress</text>
+    <text x="52" y="147" fill="#526775" font-size="24">Upload hooks</text>
+    <text x="338" y="112" fill="#152e3b" font-size="30" font-weight="700">Forminator</text>
+    <text x="338" y="147" fill="#526775" font-size="24">Submission / AJAX</text>
+
+    <rect x="34" y="228" width="532" height="150" rx="15" fill="#e7f3ef" stroke="#9dcbbd"/>
+    <text x="56" y="260" fill="#2d7b68" font-size="21" font-weight="700" letter-spacing="1.1">01 / PRESERVE</text>
+    <text x="56" y="301" fill="#153b33" font-size="34" font-weight="700">Private original</text>
+    <text x="56" y="333" fill="#3e665b" font-size="24">Exact bytes + receipt</text>
+    <text x="56" y="363" fill="#3e665b" font-size="24">Narrative stays independent</text>
+
+    <rect x="34" y="426" width="246" height="150" rx="13" fill="#fff" stroke="#cbdbe2"/>
+    <rect x="320" y="426" width="246" height="150" rx="13" fill="#fff" stroke="#cbdbe2"/>
+    <text x="52" y="465" fill="#152e3b" font-size="30" font-weight="700">WordPress</text>
+    <text x="52" y="500" fill="#526775" font-size="24">Assess in request</text>
+    <text x="52" y="531" fill="#526775" font-size="24">before public move</text>
+    <text x="338" y="465" fill="#152e3b" font-size="30" font-weight="700">Forminator</text>
+    <text x="338" y="500" fill="#526775" font-size="24">Validated final only</text>
+    <text x="338" y="531" fill="#526775" font-size="24">then bounded queue</text>
+
+    <rect x="34" y="624" width="532" height="152" rx="15" fill="#fff" stroke="#b5cbd6"/>
+    <text x="56" y="656" fill="#397286" font-size="21" font-weight="700" letter-spacing="1.1">02 / ASSESS</text>
+    <text x="56" y="697" fill="#152e3b" font-size="34" font-weight="700">Shared resource gate</text>
+    <text x="56" y="731" fill="#526775" font-size="24">One slot · CPU / RAM / time</text>
+    <text x="56" y="762" fill="#526775" font-size="24">Local native or authenticated HTTPS</text>
+
+    <rect x="34" y="824" width="246" height="142" rx="13" fill="#e7f3ef" stroke="#9dcbbd"/>
+    <rect x="320" y="824" width="246" height="142" rx="13" fill="#fff7e9" stroke="#dbc8a6"/>
+    <text x="52" y="863" fill="#153b33" font-size="28" font-weight="700">Qualified clean</text>
+    <text x="52" y="899" fill="#3e665b" font-size="24">Automatic</text>
+    <text x="52" y="930" fill="#3e665b" font-size="23">publication allowed</text>
+    <text x="338" y="863" fill="#654d23" font-size="28" font-weight="700">Remain private</text>
+    <text x="338" y="899" fill="#735f3a" font-size="24">Held · Detected</text>
+    <text x="338" y="930" fill="#735f3a" font-size="24">Failed · Deferred</text>
+
+    <path d="M34 991H566" stroke="#d4e0e5"/>
+    <text x="34" y="1020" fill="#526775" font-size="23">Deferred → bounded retry when capacity permits.</text>
+    <text x="34" y="1050" fill="#526775" font-size="21">Originals + history stay until explicit deletion.</text>
+  </g>
+</svg>

@@ -1,23 +1,117 @@
-# Bounded scan dispatch
+<p><a href="../README.md">WP ClamAV</a> / <a href="README.md">Documentation</a></p>
 
-Public upload reception does not grant permission to start unlimited scanner jobs. All scan entry points share the account dispatch slot and rolling CPU admission. The slot is acquired before original hashing, scan snapshot copies, or native startup. A refused reservation remains an incomplete held result; it never authorizes publication, an attachment, or a download.
+<a name="bounded-scan-dispatch"></a>
 
-The account slot is an OS file lock, shared across network sites and retained by native descendants through an explicit inherited descriptor. Closing the PHP supervisor's reference cannot admit another job while a surviving native process still owns that descriptor. Maintenance signals one expiring priority record before attempting the same slot; new scans defer until maintenance runs or the bounded intent expires. Priority never releases a live lock.
+# Scan admission and queues
 
-Forminator originals first require a committed canonical narrative and a server-computed `scan_receipt_ids` descriptor. Receipt tokens alone cannot authorize scans. Empty originals, unqualified adapters and known intake policy violations remain privately held without automatic engine work. An administrator may request a full scan for a nonempty complete policy-held original; that scan still cannot remove its publication policy hold.
+Uploads preserve evidence; they do not grant unlimited permission to start
+ClamAV. All scan entry points share admission, CPU accounting, and bounded work.
 
-The qualified Forminator lifecycle must be an accepted final `active` entry. Draft, abandoned, spam, pending-payment and preview entries retain their narrative and original receipt membership, but receive no automatic scan authorization. Preview dispatch is checked independently because preview entry models can also report `active`. Lifecycle holds are recorded in canonical submission metadata.
+> A refused reservation stays an incomplete held result. It never authorizes
+> publication, an attachment, or a download.
 
-`wp_clamav_dispatch` is one coalesced wake-up per site. The old `wp_clamav_scan_receipt` callback only converts its historical intent into the durable queue. It never executes a scanner. New uploads create no per-original WordPress cron events. The recurring worker recovers a missed wake-up.
+**On this page:** [Eligibility](#decide-which-uploads-can-start-scans) ·
+[Admission](#admit-one-native-operation-at-a-time) ·
+[Queue limits](#bound-the-durable-queue) ·
+[Retries and recovery](#retry-without-duplicating-work) · [Testing](#verify-changes)
 
-The private queue has a format-policy limit of 4,096 indexed requests, independent of hosting quotas. Its bounded ID index references one small marker per request. An index journal makes interrupted marker creation or retirement recoverable without traversing retained originals. A full queue holds further requests for explicit review and keeps originals and narratives. There is no unbounded spill directory or per-IP state.
+## Decide which uploads can start scans
 
-Public replay cannot replace a queued profile or submission proof, reset its next eligible time, or restart a terminal receipt. Explicit administrator requests retain the actor and profile in canonical audit records. Completed dispatch markers are operational bookkeeping and may be retired; originals, narratives, audit records and immutable scan events are retained until explicit deletion.
+Forminator originals require a committed canonical narrative and a
+server-computed `scan_receipt_ids` descriptor. Receipt tokens alone cannot
+authorize native work.
 
-Each wake inspects a bounded number of markers, processes at most `worker_batch_files` (capped at 20), and applies one absolute batch deadline to resource admission and each scan. `worker_batch_wall_seconds`, when configured, can shorten the confirmed `worker_wall_seconds`; cleanup time is reserved. A capacity refusal stops the wake immediately and pauses the whole queue until its retry time. The rotating cursor prevents repeatedly deferred requests from monopolizing dispatch.
+| Upload or lifecycle | Automatic scan behavior |
+| --- | --- |
+| Eligible, accepted final Forminator `active` entry | May queue only the server-authorized subset of its receipts. |
+| Draft, abandoned, spam, pending-payment, or preview entry | Keeps narrative and original receipt membership; grants no scan authorization. |
+| Empty original, unqualified adapter, or known intake policy violation | Remains privately held without automatic engine work. |
+| Explicit administrator request for a nonempty complete policy-held original | May request a full scan; the scan cannot remove its publication policy hold. |
 
-Capacity refusals do not consume an execution attempt and do not generate notification storms. Interrupted execution attempts remain charged in the marker; the operating policy allows three attempts by default (`worker_max_attempts`, capped at 20). Unexpected dispatch failures back off, and exhausted requests remain held for explicit review. These are operating policies, not provider entitlements.
+Preview dispatch is checked independently because preview models may also report
+`active`. Canonical submission metadata records lifecycle holds.
 
-Legacy canonical recovery uses the WordPress receipt index with a bounded ascending keyset, avoiding directory-offset walks. Recovery pauses while the index or accounting state is untrusted. It cannot invent a missing Forminator submission authorization; those originals remain available for explicit review. Normal submitted requests retain their trusted descriptor in their queue marker.
+## Admit one native operation at a time
 
-Validation includes the standalone queue crash/replay/capacity checks and the real WordPress dispatch suite. The latter uses a trusted fixture-only virtual resource clock to test pacing without sleeping, while all backend calls still pass the shared resource gate. It covers public flood coalescing, legacy conversion, deferred recovery, terminal replay, submission authorization, administrator full-scan intent and deadline enforcement. No fixture bypass is available through plugin settings.
+The account slot is a nonblocking OS file lock shared across network sites. It is
+acquired before original hashing, snapshot copies, or native startup. Native
+descendants retain an explicit inherited descriptor: closing the PHP supervisor's
+reference cannot admit another job while a surviving native process still owns it.
+
+Maintenance signals one expiring priority record before attempting the same slot.
+New scans defer until maintenance runs or the bounded intent expires. Priority
+never releases a live lock.
+
+Rolling CPU admission and native CPU, address-space, and wall limits apply in
+addition to this slot. See [resource budgets](resource-constraints.md) for the
+confirmed allocation requirements and maintenance reserve.
+
+## Bound the durable queue
+
+`wp_clamav_dispatch` is **one coalesced wake-up per site**. New uploads do not
+create per-original cron events. The legacy `wp_clamav_scan_receipt` callback
+converts its historical intent into the durable queue; it never runs a scanner.
+The recurring worker recovers a missed wake-up.
+
+| Control | Bound or behavior |
+| --- | --- |
+| Indexed pending requests | 4,096; a format-policy limit independent of hosting quotas. |
+| Request state | Bounded ID index and one small marker per request; no unbounded spill directory or per-IP map. |
+| Crash recovery | Index journal repairs interrupted marker creation or retirement without walking retained originals. |
+| `worker_batch_files` | At most 20 jobs per wake; marker inspection is also bounded. |
+| `worker_batch_wall_seconds` | May shorten confirmed `worker_wall_seconds`; cannot extend it. |
+| `worker_max_attempts` | Three attempts by default, capped at 20; an operating policy, not a provider entitlement. |
+
+A full queue holds further requests for explicit review and preserves originals
+and narratives. Completed markers are operational bookkeeping and may be retired.
+Originals, narratives, audit records, and immutable scan events remain until
+explicit deletion.
+
+## Retry without duplicating work
+
+Each wake applies one absolute batch deadline to admission and every scan,
+reserving cleanup time. A capacity refusal stops the wake and pauses the queue
+until the retry time. The rotating cursor prevents repeatedly deferred requests
+from monopolizing dispatch.
+
+Capacity refusals do not consume an execution attempt or create notification
+storms. Interrupted execution attempts remain charged in the marker. Unexpected
+dispatch failures back off; exhausted requests stay held for explicit review.
+
+Public replay cannot replace a queued profile or submission proof, reset the
+next eligible time, or restart a terminal receipt. A stale automatic request is
+retired when a synchronous scan has already finished the original. Terminal state
+is rechecked under the per-receipt scan lock before hashes or native startup.
+Explicit administrator requests preserve the actor and profile in canonical audit
+records.
+
+### Recover a missed legacy intent
+
+Canonical recovery uses the WordPress receipt index with a bounded ascending
+keyset, avoiding directory-offset walks. It pauses while the index or accounting
+state is untrusted. Recovery cannot invent a missing Forminator submission
+authorization; those originals stay available for explicit review. Normal
+submitted requests retain their trusted descriptor in the queue marker.
+
+## Verify changes
+
+Run the standalone queue and admission contracts:
+
+```sh
+php tests/scan-queue.php
+php tests/scan-admission.php
+php tests/resource-dispatch.php
+```
+
+The [real WordPress dispatch suite](../tests/dispatch-wordpress.php) additionally
+covers public flood coalescing, legacy conversion, deferred recovery, terminal
+replay, submission authorization, administrator full-scan intent, stale queue
+retirement, and deadlines.
+
+That fixture uses a trusted virtual resource clock to test pacing without
+sleeping. Every backend call still passes the shared resource gate. No stored
+plugin setting provides a fixture bypass. Use the disposable setup documented in
+[development](development.md) and [the WordPress test guide](../tests/wordpress/README.md).
+
+**Related:** [Architecture](architecture.md) ·
+[Resource budgets](resource-constraints.md) · [Retention and storage](storage-accounting.md)
