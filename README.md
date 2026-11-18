@@ -41,7 +41,7 @@ WordPress upload and sideload APIs, plus Forminator's normal and AJAX uploads.
 | WordPress | Declared minimum **6.4**; integration fixture **7.1.4** |
 | Forminator | Adapter qualified for **1.58.4**; other versions hold attachments |
 | Local native bundle | Linux **x86-64 / glibc 2.36** target; hosting capacity and permissions need separate checks |
-| Releases | CI produces pending candidates; installable signed releases require protected promotion and configured keys |
+| Releases | Native previews publish automatically with changelogs; installable code requires protected signing and configured trust keys |
 
 The website plugin needs no resident daemon, root access, Python or on-site
 compilation. Native binaries and databases are separate from the plugin ZIP.

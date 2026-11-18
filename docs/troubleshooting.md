@@ -33,7 +33,7 @@ a kernel quota for the whole hosting account.
 | Database is stale, missing or unvalidated | The scanner holds/fails work. Check the last update outcome, original-source connectivity, persistent cooldown, certificates and update storage/work allocations. |
 | A new generation or code candidate fails validation | The last valid program/database tuple stays active. Diagnose the candidate; do not edit the active pointer or bypass validation. |
 | Release verification key is missing | Code installation is unconfigured. Existing native installations can still maintain official databases independently. |
-| No signed release is available | A pending CI artifact is not an installable signed channel release. Follow [release promotion](releases.md). |
+| No signed release is available | Pending artifacts and unsigned native development releases cannot be installed. Configure protected signing and the matching client trust key; see [releases](releases.md). |
 | Update attempts defer | Check the two-hour minimum interval, upstream cooldown, maintenance admission and total state bytes/inodes. Retained old generations still consume space. |
 
 Database freshness defaults to **48 hours** as policy. Historical test allowances

@@ -12,6 +12,11 @@ final class CodeUpdateClient
     private const API = 'https://api.github.com/repos/Barbarrosa/clamav/releases';
     private const DOWNLOAD = 'https://github.com/Barbarrosa/clamav/releases/download/';
     private const PLATFORM = 'linux-x86_64-glibc2.36';
+    private const NUMBER = '(?:0|[1-9][0-9]*)';
+    private const PRERELEASE_ID = '(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][A-Za-z0-9-]*)';
+    private const SEMVER_BASE = self::NUMBER . '\.' . self::NUMBER . '\.' . self::NUMBER
+        . '(?:-' . self::PRERELEASE_ID . '(?:\.' . self::PRERELEASE_ID . ')*)?';
+    private const SEMVER = self::SEMVER_BASE . '(?:\+[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)?';
     private \Closure $http;
     private ?\Closure $download;
     private float $deadline = 0;
@@ -170,10 +175,20 @@ final class CodeUpdateClient
             $value = json_decode($response['body'], true, 64, JSON_THROW_ON_ERROR);
         }
         if (!is_array($value) || ($value['draft'] ?? null) !== false || ($value['prerelease'] ?? null) !== ($channel === 'preview')
-            || !is_string($value['tag_name'] ?? null) || !preg_match('/\Acompact-v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9.-]+)?\z/D', $value['tag_name'])) {
+            || !is_string($value['tag_name'] ?? null) || !$this->releaseIdentity($value['tag_name'])) {
             throw new \RuntimeException('GitHub release does not match the selected native release channel.');
         }
         return $value;
+    }
+
+    private function releaseIdentity(string $tag, ?string $version = null, ?int $sequence = null): bool
+    {
+        $pattern = '(?:compact-v' . self::SEMVER . '|clamav-' . self::SEMVER_BASE . '\+(?:[A-Za-z0-9-]+\.)*compact\.[1-9][0-9]*)';
+        if (!preg_match('/\A' . $pattern . '\z/D', $tag)) { return false; }
+        return $version === null || (preg_match('/\A' . self::SEMVER . '\z/D', $version)
+            && ($tag === 'compact-v' . $version || $tag === 'clamav-' . $version)
+            && (!str_starts_with($tag, 'clamav-') || $sequence === null || str_ends_with($tag, '.compact.' . $sequence)
+                || str_ends_with($tag, '+compact.' . $sequence)));
     }
 
     private function assets(array $release, string $tag, int $manifestLimit): array
@@ -185,7 +200,7 @@ final class CodeUpdateClient
             $name = $asset['name'];
             if (isset($found[$name]) || ($asset['state'] ?? null) !== 'uploaded'
                 || !is_int($asset['size'] ?? null) || $asset['size'] < 1
-                || ($asset['browser_download_url'] ?? null) !== self::DOWNLOAD . $tag . '/' . $name) {
+                || ($asset['browser_download_url'] ?? null) !== self::DOWNLOAD . rawurlencode($tag) . '/' . $name) {
                 throw new \RuntimeException('Native manifest assets are missing, ambiguous or outside the fixed release.');
             }
             $found[$name] = $asset;
@@ -199,7 +214,8 @@ final class CodeUpdateClient
     {
         if (!is_array($manifest) || ($manifest['repository'] ?? null) !== self::REPOSITORY || ($manifest['tag'] ?? null) !== $tag
             || ($manifest['platform'] ?? null) !== self::PLATFORM || ($manifest['channel'] ?? null) !== $channel
-            || !is_string($manifest['version'] ?? null) || 'compact-v' . $manifest['version'] !== $tag
+            || !is_string($manifest['version'] ?? null) || !is_int($manifest['sequence'] ?? null)
+            || !$this->releaseIdentity($tag, $manifest['version'], $manifest['sequence'])
             || !is_array($manifest['files'] ?? null) || !array_is_list($manifest['files']) || count($manifest['files']) > 512) {
             throw new \RuntimeException('Signed native manifest does not match the repository, release tag, platform or channel.');
         }
@@ -208,7 +224,7 @@ final class CodeUpdateClient
             if (!is_array($file) || !is_string($file['path'] ?? null) || !is_string($file['sha256'] ?? null)
                 || !preg_match('/\A[a-f0-9]{64}\z/D', $file['sha256']) || !is_int($file['size'] ?? null) || $file['size'] < 1
                 || $file['size'] > PHP_INT_MAX - $total
-                || ($file['url'] ?? null) !== self::DOWNLOAD . $tag . '/' . substr($file['sha256'], 0, 16) . '--' . basename($file['path'])) {
+                || ($file['url'] ?? null) !== self::DOWNLOAD . rawurlencode($tag) . '/' . rawurlencode(substr($file['sha256'], 0, 16) . '--' . basename($file['path']))) {
                 throw new \RuntimeException('Signed native file is not bound to its exact release asset.');
             }
             $total += $file['size'];

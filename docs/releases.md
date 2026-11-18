@@ -6,19 +6,38 @@
 
 Build once, qualify the exact artifact, then promote it with the selected channel's signing key. The plugin, native scanner and signature database have separate update paths.
 
-> **Current status:** experimental preview candidates. A passing build is not a signed release or a SiteGround deployment qualification. Stable publication remains blocked while its qualification is incomplete.
+> **Current status:** experimental. Qualified native builds publish preview releases automatically; plugin releases use protected promotion. Unsigned development releases cannot be installed by update clients. Actual SiteGround qualification and stable publication remain gated.
 
-**On this page:** [Update paths](#three-update-paths) · [Build a candidate](#1-build-and-review-a-candidate) · [Configure signing](#2-configure-signing-environments) · [Promote](#3-promote-the-tested-candidate) · [Client trust](#configure-update-clients) · [Artifact reference](#artifact-reference)
+**On this page:** [Update paths](#three-update-paths) · [Native releases](#automatic-native-releases) · [Build a plugin candidate](#1-build-and-review-a-candidate) · [Configure signing](#2-configure-signing-environments) · [Promote](#3-promote-the-tested-candidate) · [Client trust](#configure-update-clients) · [Artifact reference](#artifact-reference)
 
 ## Three update paths
 
 | Component | Source & version identity | What changes on the website |
 | --- | --- | --- |
 | WordPress plugin | [`Barbarrosa/wp-clamav`](https://github.com/Barbarrosa/wp-clamav), `v<version>` tags | WordPress installs the authenticated plugin ZIP. |
-| Native ClamAV bundle | [`Barbarrosa/clamav`](https://github.com/Barbarrosa/clamav/tree/upstream-optimized), `compact-v<version>` tags | Verified programs, libraries and certificates are staged; native validation selects a matching program/database tuple. |
+| Native ClamAV bundle | [`Barbarrosa/clamav`](https://github.com/Barbarrosa/clamav/tree/upstream-optimized), `clamav-<upstream-version>+compact.<revision>` tags | Verified programs, libraries and certificates are staged; native validation selects a matching program/database tuple. |
 | Signature database | Original ClamAV distribution endpoints | The on-site FreshClam component authenticates and prepares a new generation under its rate and backoff policy. |
 
 A plugin update does not activate a native program or replace a database generation. Database maintenance needs no secondary database publisher and does not require uploading submissions or complaint evidence.
+
+## Automatic native releases
+
+The native repository's [`compact-native.yml`](https://github.com/Barbarrosa/clamav/blob/upstream-optimized/.github/workflows/compact-native.yml) qualifies optimized default-branch builds, then automatically publishes a GitHub prerelease from the exact candidate. Pull requests and pristine fallback builds cannot publish. Each release includes `CHANGELOG.md` covering upstream and fork changes, comparison links, matching source, licenses, SBOM and provenance.
+
+The native version starts with the **actual built upstream engine version** and adds the fork revision in SemVer's optional build metadata:
+
+| Field | Example |
+| --- | --- |
+| Upstream engine | `1.6.0-devel-20261118` |
+| Native release version | `1.6.0-devel-20261118+compact.13` |
+| Native GitHub tag | `clamav-1.6.0-devel-20261118+compact.13` |
+| Manifest sequence / fork revision | `13`, the qualification workflow run number |
+
+Existing upstream build metadata is preserved before `.compact.<revision>`. GitHub download URLs encode the `+` as `%2B`. Clients retain support for legacy `compact-v<version>` tags, verify canonical tag/version/URL identities and order updates by the signed monotonic sequence. The plugin keeps its independent `v<version>` tags and version; the native integration recipe's internal version is also independent.
+
+With both preview signing keys configured in the protected native environment, publication signs the exact candidate manifest. With both absent, it publishes a clearly labelled **unsigned development prerelease** for review. Partial or invalid key configuration fails publication. Authenticated clients reject unsigned releases; GitHub publication or build provenance alone does not authorize installation. Stable native publication remains manual and requires the signing, protection and qualification gates described in the [native release guide](https://github.com/Barbarrosa/clamav/blob/upstream-optimized/compact-integration/release/README.md).
+
+Native publication uses GitHub Actions and Releases with scoped `GITHUB_TOKEN` content-write permission; no additional service account is required. Enabling installable updates needs repository environment and branch-protection access plus protected signing keys. Publishing a release does not deploy or enable scanning on a website.
 
 ## 1. Build and review a candidate
 
@@ -54,7 +73,7 @@ Create `compact-preview` and `compact-stable` in the plugin repository:
 
 Use separate channel keys. Provision the native repository's trust and release environments independently; plugin and native signing keys serve different update paths.
 
-Distribute the matching public key to the reviewed update-client configuration. Private keys belong only in protected secret storage: never source, logs, public assets or chat. Missing keys, missing environment protection or incomplete stable qualification stop publication.
+Distribute the matching public key to the reviewed update-client configuration. Private keys belong only in protected secret storage: never source, logs, public assets or chat. Missing keys, missing environment protection or incomplete stable qualification stop plugin promotion and stable native publication. The native preview workflow can publish the explicitly unsigned development releases described above.
 
 ## 3. Promote the tested candidate
 

@@ -32,7 +32,7 @@ final class ReleaseInstaller
             || !is_int($manifest['sequence'] ?? null) || $manifest['sequence'] < 1 || !is_int($manifest['expires_at'] ?? null) || $manifest['expires_at'] <= $now) {
             throw new \RuntimeException('Release is expired or incompatible with the selected trust channel.');
         }
-        if (!is_string($manifest['version'] ?? null) || !preg_match('/\A[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9.-]+)?\z/D', $manifest['version'])) { throw new \RuntimeException('Release version is invalid.'); }
+        if (!is_string($manifest['version'] ?? null) || !preg_match('/\A(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][A-Za-z0-9-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][A-Za-z0-9-]*))*)?(?:\+[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)?\z/D', $manifest['version'])) { throw new \RuntimeException('Release version is invalid.'); }
         if (PHP_OS_FAMILY !== 'Linux' || php_uname('m') !== 'x86_64' || !in_array($manifest['platform'] ?? null, ['linux-x86_64-glibc2.36', 'linux-x86_64-glibc-2.36'], true)) {
             throw new \RuntimeException('This native package does not match the host platform.');
         }

@@ -42,6 +42,7 @@ final class CodeClientFixture
     public ?array $previewList = null;
     public string $signature;
     public string $manifestBytes;
+    public string $releaseTag = 'compact-v0.1.0';
     private string $secret;
     public string $programs;
 
@@ -79,10 +80,26 @@ final class CodeClientFixture
         $this->signature = sodium_crypto_sign_detached($this->manifestBytes, $this->secret);
     }
 
+    public function retag(string $version, int $sequence, ?string $tag = null): void
+    {
+        $this->releaseTag = $tag ?? 'clamav-' . $version;
+        $this->manifest['tag'] = $this->releaseTag;
+        $this->manifest['version'] = $version;
+        $this->manifest['sequence'] = $sequence;
+        foreach ($this->manifest['files'] as &$file) {
+            $bytes = $this->contents[$file['url']];
+            $file['url'] = 'https://github.com/Barbarrosa/clamav/releases/download/' . rawurlencode($this->releaseTag)
+                . '/' . rawurlencode(substr($file['sha256'], 0, 16) . '--' . basename($file['path']));
+            $this->contents[$file['url']] = $bytes;
+        }
+        unset($file);
+        $this->sign();
+    }
+
     public function release(?string $channel = null): array
     {
-        $tag = 'compact-v0.1.0';
-        $base = 'https://github.com/Barbarrosa/clamav/releases/download/' . $tag . '/';
+        $tag = $this->releaseTag;
+        $base = 'https://github.com/Barbarrosa/clamav/releases/download/' . rawurlencode($tag) . '/';
         return ['tag_name' => $tag, 'draft' => false, 'prerelease' => ($channel ?? $this->settings['release_channel']) === 'preview',
             'assets' => [
                 ['name' => 'manifest.json', 'state' => 'uploaded', 'size' => strlen($this->manifestBytes), 'browser_download_url' => $base . 'manifest.json'],
@@ -99,11 +116,12 @@ final class CodeClientFixture
             && $arguments['timeout'] > 0 && $arguments['timeout'] <= 10, 'each HTTP request has bounded bytes and remaining time');
         codeClientCheck(!isset($arguments['headers']['Authorization']) && $arguments['cookies'] === [], 'discovery forwards no account credentials');
         if ($this->response !== null && ($response = ($this->response)($url, $arguments, $this)) !== null) { return $response; }
+        $base = 'https://github.com/Barbarrosa/clamav/releases/download/' . rawurlencode($this->releaseTag) . '/';
         $body = match ($url) {
             'https://api.github.com/repos/Barbarrosa/clamav/releases/latest' => json_encode($this->release(), JSON_THROW_ON_ERROR),
             'https://api.github.com/repos/Barbarrosa/clamav/releases?per_page=3&page=1' => json_encode($this->previewList ?? [$this->release()], JSON_THROW_ON_ERROR),
-            'https://github.com/Barbarrosa/clamav/releases/download/compact-v0.1.0/manifest.json' => $this->manifestBytes,
-            'https://github.com/Barbarrosa/clamav/releases/download/compact-v0.1.0/manifest.sig' => $this->signature,
+            $base . 'manifest.json' => $this->manifestBytes,
+            $base . 'manifest.sig' => $this->signature,
             default => throw new RuntimeException('Unexpected fixture HTTP URL: ' . $url),
         };
         return ['response' => ['code' => 200], 'headers' => [], 'body' => $body];
@@ -175,6 +193,61 @@ try {
     $downloads = count($fixture->downloads);
     codeClientCheck($fixture->client()->stageNext()['id'] === $candidate['id'] && count($fixture->downloads) === $downloads,
         'a later retry reuses a verified staged package without downloading or activating it');
+
+    foreach ([['1.5.1+compact.12', 12, 'stable'], ['1.6.0-devel-20261118+compact.123', 123, 'preview'],
+        ['1.6.0-rc.1+vendor.004.compact.124', 124, 'preview']] as $index => [$version, $sequence, $channel]) {
+        $fixture = new CodeClientFixture($temporary . '/upstream-version-' . $index, $channel);
+        $fixture->retag($version, $sequence);
+        $candidate = $fixture->client()->stageNext();
+        codeClientCheck($candidate['manifest']['version'] === $version && $candidate['manifest']['tag'] === 'clamav-' . $version,
+            'canonical native discovery stages the exact upstream version and fork metadata');
+        codeClientCheck(str_contains($fixture->httpCalls[1][0], '%2B') && count($fixture->downloads) === 2,
+            'GitHub percent-encoded metadata URLs remain fixed to authenticated native files');
+        codeClientCheck(file_get_contents($candidate['path'] . '/manifest.exact') === $fixture->manifestBytes
+            && !file_exists($fixture->programs . '/current.json'), 'new tag staging retains signed bytes without activating');
+    }
+
+    foreach (['01.6.0+compact.1', '1.06.0+compact.1', '1.6.00+compact.1', '1.6.0-01+compact.1',
+        '1.6.0+compact.01', '1.6.0+compact.0', '1.6.0+compact..1', '1.6.0+compact.1.',
+        '1.6.0+vendor..compact.1', '1.6.0+compact.1+other', '1.6.0+vendor.1', '1.6.0+'] as $index => $version) {
+        $fixture = new CodeClientFixture($temporary . '/malformed-upstream-' . $index);
+        $fixture->retag($version, 1);
+        codeClientRejects(fn() => $fixture->client()->stageNext(), 'malformed or noncanonical native metadata is rejected');
+        codeClientCheck(count($fixture->httpCalls) === 1 && $fixture->downloads === [], 'invalid tag stops before signed metadata or payload requests');
+    }
+
+    foreach (['version', 'tag', 'sequence', 'asset-url', 'file-url'] as $fault) {
+        $fixture = new CodeClientFixture($temporary . '/upstream-binding-' . $fault);
+        $fixture->retag('1.6.0-devel-20261118+compact.123', 123);
+        if ($fault === 'version') { $fixture->manifest['version'] = '1.6.0-devel-20261118+compact.124'; }
+        elseif ($fault === 'tag') { $fixture->manifest['tag'] = 'clamav-1.6.0-devel-20261118+compact.124'; }
+        elseif ($fault === 'sequence') { $fixture->manifest['sequence'] = 124; }
+        elseif ($fault === 'file-url') { $fixture->manifest['files'][0]['url'] = str_replace('%2B', '+', $fixture->manifest['files'][0]['url']); }
+        else {
+            $fixture->response = static function ($url, $args, $self): ?array {
+                if (!str_ends_with($url, '/latest')) { return null; }
+                $value = $self->release();
+                $value['assets'][0]['browser_download_url'] = str_replace('%2B', '+', $value['assets'][0]['browser_download_url']);
+                return ['response' => ['code' => 200], 'headers' => [], 'body' => json_encode($value, JSON_THROW_ON_ERROR)];
+            };
+        }
+        $fixture->sign();
+        codeClientRejects(fn() => $fixture->client()->stageNext(), 'signed canonical releases bind exact ' . $fault);
+        codeClientCheck($fixture->downloads === [], 'canonical release identity mismatches never fetch programs');
+    }
+
+    $fixture = new CodeClientFixture($temporary . '/unsigned-upstream', 'preview');
+    $fixture->retag('1.6.0-devel-20261118+compact.123', 123);
+    $unsigned = $fixture->release(); array_pop($unsigned['assets']); $fixture->previewList = [$unsigned];
+    codeClientRejects(fn() => $fixture->client()->stageNext(), 'unsigned development releases remain un-installable');
+    codeClientCheck(count($fixture->httpCalls) === 1 && $fixture->downloads === [], 'unsigned prerelease does not fetch metadata or programs');
+
+    $fixture = new CodeClientFixture($temporary . '/upstream-replay');
+    $fixture->retag('1.5.1+compact.123', 123); $fixture->client()->stageNext();
+    $fixture->allowNextAttempt(); $fixture->retag('1.6.0+compact.122', 122);
+    $downloads = count($fixture->downloads);
+    codeClientRejects(fn() => $fixture->client()->stageNext(), 'a newer upstream version cannot reset the monotonic release sequence');
+    codeClientCheck(count($fixture->downloads) === $downloads, 'fork metadata preserves rollback protection before payload fetch');
 
     $fixture = new CodeClientFixture($temporary . '/preview', 'preview');
     $draft = $fixture->release(); $draft['draft'] = true;

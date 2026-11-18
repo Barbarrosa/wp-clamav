@@ -40,9 +40,10 @@ Use **Settings** for the backend and allocations, **Notifications** for delivery
 rules, **Capacity and diagnostics** for observations, and **Uploads and review**
 for retained originals and decisions.
 
-CI creates pending experimental artifacts. A candidate artifact is not an
-installable signed release. Read [the release guide](releases.md) before choosing
-a candidate or configuring an automatic update channel.
+Plugin CI creates pending experimental artifacts; native CI also publishes
+preview releases with a changelog. Pending artifacts and unsigned development
+releases cannot be installed by the authenticated updater. Read
+[the release guide](releases.md) before configuring an automatic update channel.
 
 ## 2. Create private storage
 
